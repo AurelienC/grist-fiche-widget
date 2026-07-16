@@ -1,0 +1,14 @@
+# OS / éditeurs
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+
+# Config locale Claude Code
+.claude/
+
+# Sauvegardes / temporaires
+*~
+*.bak
+/tmp/

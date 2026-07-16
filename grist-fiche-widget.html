@@ -1,0 +1,2202 @@
+<!DOCTYPE html>
+<!--
+  Grist Fiche — vue « fiche » détaillée éditable pour Grist (style Notion/Coda)
+  Widget personnalisé Grist, en un seul fichier HTML autonome (aucune étape de build).
+
+  Fonctionne en accès « Full » via l'API plugin Grist (postMessage). Affiche un
+  enregistrement à la fois : édition au clic, références ouvrables, sous-tableaux,
+  pièces jointes avec visionneuse, image d'en-tête, liens d'ancrage partageables.
+
+  Copyright (C) 2026 Aurélien Cadiou
+  Licence : GNU Affero General Public License v3.0 (AGPL-3.0) — voir le fichier LICENSE.
+  Code source : https://github.com/AurelienC/grist-fiche-widget
+
+  Ce programme est un logiciel libre : il peut être redistribué et/ou modifié
+  selon les termes de la GNU AGPL v3 publiée par la Free Software Foundation.
+  Il est distribué sans aucune garantie. Voir la licence pour les détails.
+-->
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fiche — widget Grist</title>
+
+<!-- Rendu markdown + nettoyage HTML -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.5/purify.min.js"></script>
+
+<!-- Éditeur markdown WYSIWYG (barre d'outils + Ctrl+B, Ctrl+I…) -->
+<link rel="stylesheet" href="https://uicdn.toast.com/editor/3.2.2/toastui-editor.min.css">
+<script src="https://uicdn.toast.com/editor/3.2.2/toastui-editor-all.min.js"></script>
+<script src="https://uicdn.toast.com/editor/3.2.2/i18n/fr-fr.min.js"></script>
+
+<!-- API plugin Grist. Sur instance auto-hébergée, remplace le domaine par le tien. -->
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+
+<style>
+  :root{
+    --bg:#ffffff;
+    --bg-soft:#f7f7f5;
+    --ink:#2e2a26;
+    --ink-soft:#6b665f;
+    --ink-faint:#9b9690;
+    --line:#ecebe8;
+    --line-strong:#dedcd7;
+    --accent:#5b5bd6;          /* violet calme : focus, liens */
+    --accent-soft:#eeeefb;
+    --radius:8px;
+    --maxw:760px;
+    --label-w:150px;
+    font-synthesis:none;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#1f1d1b; --bg-soft:#272421; --ink:#ece9e4; --ink-soft:#aaa49b;
+      --ink-faint:#7d7770; --line:#34302c; --line-strong:#403b36;
+      --accent:#a8a8f0; --accent-soft:#2c2a42;
+    }
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;height:100%;background:var(--bg);color:var(--ink);
+    font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:var(--maxw);margin:0 auto;padding:28px 26px 40px;
+    min-height:100%;display:flex;flex-direction:column;box-sizing:border-box}
+
+  /* Titre de la fiche */
+  .title{font-size:30px;font-weight:700;line-height:1.2;letter-spacing:-0.02em;
+    margin:0 0 22px;padding:2px 4px;border-radius:6px;cursor:text;word-break:break-word}
+  .title:hover{background:var(--bg-soft)}
+  .title.empty::before{content:"Sans titre";color:var(--ink-faint)}
+
+  /* En-tête : bouton (coin), titre + sous-titre alignés, puis tags */
+  .fiche-header{position:relative;margin-bottom:20px;padding-right:96px;min-height:30px}
+  .fiche-header .header-actions{position:absolute;top:0;right:0;display:flex;gap:8px;align-items:center}
+  .gear.linkbtn{color:var(--ink-soft)}
+  .header-main{display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 12px}
+  .header-lead{display:flex;align-items:flex-start;gap:16px}
+  .header-body{flex:1;min-width:0}
+  .head-img{flex:0 0 auto;width:60px;height:60px;border-radius:14px;overflow:hidden;
+    background:var(--bg-soft);display:inline-flex;align-items:center;justify-content:center;
+    border:1px solid var(--line)}
+  .head-img img{width:100%;height:100%;object-fit:cover;display:block}
+  .fiche-header .title{margin:0}
+  .subtitle{font-size:16px;color:var(--ink-soft);padding:2px 4px;border-radius:6px;
+    cursor:pointer;margin:0;word-break:break-word}
+  .subtitle:hover{background:var(--bg-soft)}
+  .subtitle.placeholder{color:var(--ink-faint)}
+  .subtitle.readonly{cursor:default;opacity:.7}
+  .subtitle.readonly:hover{background:transparent}
+  .tags-row{margin:8px 0 0}
+  .tags{display:flex;flex-wrap:wrap;gap:5px;padding:3px 4px;border-radius:6px;cursor:pointer}
+  .tags:hover{background:var(--bg-soft)}
+  .tags.readonly{cursor:default;opacity:.7}
+  .tags.readonly:hover{background:transparent}
+  .tags .placeholder{color:var(--ink-faint);font-size:13px}
+
+  /* Sous-tableau (références multiples) */
+  .subtable-block{margin-top:6px}
+  .st-count{font-size:11px;color:var(--ink-faint);background:var(--bg-soft);
+    border:1px solid var(--line);border-radius:9px;padding:0 6px}
+  .subtable-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:8px;margin-top:2px}
+  table.subtable{border-collapse:collapse;width:100%;font-size:13.5px}
+  table.subtable th,table.subtable td{text-align:left;padding:6px 10px;white-space:nowrap;
+    border-bottom:1px solid var(--line)}
+  table.subtable thead th{font-size:11.5px;font-weight:600;color:var(--ink-soft);
+    background:var(--bg-soft);position:sticky;top:0}
+  table.subtable tbody tr:last-child td{border-bottom:none}
+  table.subtable tbody tr:hover{background:var(--bg-soft)}
+  table.subtable .chip{font-size:12px;padding:1px 8px}
+  table.subtable td.st-wrap{white-space:normal;max-width:340px;vertical-align:top}
+  .st-md{max-height:130px;overflow:hidden;font-size:13px;line-height:1.45;position:relative}
+  .st-md > :first-child{margin-top:0}
+  .st-md > :last-child{margin-bottom:0}
+  .st-md h1,.st-md h2,.st-md h3,.st-md h4{font-size:13.5px;font-weight:650;margin:.5em 0 .2em}
+  .st-md p{margin:.3em 0}
+  .st-md ul,.st-md ol{margin:.3em 0;padding-left:1.2em}
+  .st-md code{font-size:12px}
+  .st-md pre{white-space:pre-wrap;font-size:12px;margin:.3em 0}
+  .st-openh{width:30px}
+  .st-openc{width:30px;text-align:center}
+  .st-open{cursor:pointer;color:var(--ink-faint);font-size:13px;display:inline-block;
+    padding:2px 4px;border-radius:5px}
+  .st-open:hover{color:var(--accent);background:var(--bg)}
+  .st-more{font-size:12px;color:var(--ink-faint);padding:4px 2px}
+
+  /* Bloc propriétés (clé/valeur) — multi-colonnes responsive */
+  .props{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));
+    column-gap:26px;row-gap:1px;margin-bottom:24px;align-content:start}
+  .prop{display:grid;grid-template-columns:var(--label-w) 1fr;gap:8px;align-items:start;
+    padding:3px 4px;border-radius:6px;min-height:32px;min-width:0}
+  .prop:hover{background:var(--bg-soft)}
+  .prop-label{display:flex;align-items:center;gap:7px;color:var(--ink-soft);
+    font-size:13.5px;font-weight:500;padding-top:5px;user-select:none;overflow:hidden}
+  .prop-label .ico{width:15px;height:15px;flex:0 0 15px;color:var(--ink-faint);opacity:.85}
+  .prop-label .txt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .prop-val{min-width:0;padding:4px 5px;border-radius:6px;cursor:pointer;font-size:14.5px;
+    overflow-wrap:anywhere;word-break:break-word;position:relative}
+  .prop-val:hover{box-shadow:inset 0 0 0 1px var(--line-strong)}
+  .prop-val.placeholder{color:var(--ink-faint)}
+  /* Navigation vers enregistrement lié */
+  .navbar{display:flex;align-items:center;gap:10px;margin-bottom:14px}
+  .navback{font:inherit;font-size:13px;padding:4px 11px;border-radius:6px;cursor:pointer;
+    border:1px solid var(--line-strong);background:var(--bg);color:var(--ink)}
+  .navback:hover{background:var(--bg-soft)}
+  .navinfo{font-size:12px;color:var(--ink-faint)}
+  /* Pastille de référence cliquable */
+  .chip.ref-open{cursor:pointer}
+  .chip.ref-open:hover{filter:brightness(.96);box-shadow:inset 0 0 0 1px var(--line-strong)}
+  .chip.ref-open .op{opacity:.5;font-size:11px}
+  .prop-val .lk{color:var(--accent);text-decoration:none;border-bottom:1px solid var(--accent-soft)}
+  .prop-val .lk:hover{border-bottom-color:var(--accent)}
+  .cell-actions{position:absolute;top:2px;right:2px;display:flex;gap:2px;opacity:0;
+    background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:1px;
+    transition:opacity .12s;pointer-events:none}
+  .prop-val:hover .cell-actions{opacity:1;pointer-events:auto}
+  .cell-act{display:inline-flex;align-items:center;justify-content:center;width:24px;height:22px;
+    color:var(--ink-faint);cursor:pointer;border-radius:5px}
+  .cell-act:hover{color:var(--accent);background:var(--bg-soft)}
+  .cell-act.done{color:#3a7a3a}
+  .cell-act .ico{width:14px;height:14px}
+  .prop-val.readonly{cursor:default;opacity:.65}
+  .prop-val.readonly:hover{box-shadow:none}
+  .title.readonly{cursor:default;opacity:.85}
+  .md[data-ro]{cursor:default;opacity:.7;border-color:transparent!important}
+
+  /* Chips (Choice / ChoiceList) */
+  .chips{display:flex;flex-wrap:wrap;gap:5px}
+  .chip{display:inline-flex;align-items:center;padding:1px 9px;border-radius:11px;
+    font-size:12.5px;font-weight:500;background:#e9e7e4;color:#34302c;line-height:1.7}
+
+  /* Booléen */
+  .bool{display:inline-flex;align-items:center;gap:7px}
+  .bool .box{width:16px;height:16px;border-radius:4px;border:1.5px solid var(--line-strong);
+    display:inline-flex;align-items:center;justify-content:center}
+  .bool.on .box{background:var(--accent);border-color:var(--accent)}
+  .bool.on .box svg{display:block}
+  .bool .box svg{display:none;width:11px;height:11px;color:#fff}
+
+  /* Corps : blocs markdown longs */
+  .body-block{margin:8px 0 4px;position:relative}
+  .body-head{display:flex;align-items:center;gap:7px;color:var(--ink-soft);
+    font-size:13px;font-weight:500;margin:18px 4px 6px}
+  .body-head .ico{width:15px;height:15px;color:var(--ink-faint)}
+  .md{padding:6px 8px;border-radius:8px;cursor:text;border:1px solid transparent;min-height:90px}
+  .md:hover{border-color:var(--line)}
+  .md.placeholder{color:var(--ink-faint)}
+  /* Dernier champ : prend la hauteur restante (façon corps de page Notion) */
+  .body-block.grow{flex:1 1 auto;display:flex;flex-direction:column;min-height:200px}
+  .body-block.grow .md{flex:1 1 auto}
+  .md > :first-child{margin-top:0}
+  .md > :last-child{margin-bottom:0}
+  .md h1,.md h2,.md h3{line-height:1.25;font-weight:650;letter-spacing:-0.01em;margin:1.1em 0 .4em}
+  .md h1{font-size:1.5em} .md h2{font-size:1.27em} .md h3{font-size:1.1em}
+  .md p{margin:.55em 0}
+  .md ul,.md ol{margin:.5em 0;padding-left:1.4em}
+  .md li{margin:.18em 0}
+  .md a{color:var(--accent);text-decoration:none;border-bottom:1px solid var(--accent-soft)}
+  .md a:hover{border-bottom-color:var(--accent)}
+  .md code{background:var(--bg-soft);border:1px solid var(--line);border-radius:4px;
+    padding:.08em .35em;font-size:.88em;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  .md pre{background:var(--bg-soft);border:1px solid var(--line);border-radius:8px;
+    padding:12px 14px;overflow:auto}
+  .md pre code{background:none;border:none;padding:0}
+  .md blockquote{margin:.6em 0;padding:.1em 0 .1em 14px;border-left:3px solid var(--line-strong);color:var(--ink-soft)}
+  .md table{border-collapse:collapse;margin:.6em 0;font-size:.92em}
+  .md th,.md td{border:1px solid var(--line);padding:5px 10px;text-align:left}
+  .md th{background:var(--bg-soft);font-weight:600}
+  .md hr{border:none;border-top:1px solid var(--line);margin:1.2em 0}
+  .md input[type=checkbox]{margin-right:6px}
+
+  /* Champs d'édition */
+  .editor{width:100%;font:inherit;color:var(--ink);background:var(--bg);
+    border:1px solid var(--accent);border-radius:6px;padding:5px 8px;outline:none;
+    box-shadow:0 0 0 3px var(--accent-soft)}
+  textarea.editor{min-height:160px;resize:vertical;line-height:1.6;
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13.5px}
+  select.editor{appearance:none;cursor:pointer}
+  .edit-hint{font-size:11.5px;color:var(--ink-faint);margin-top:5px;display:flex;
+    justify-content:space-between;gap:10px;align-items:center}
+  .edit-hint .right{display:flex;align-items:center;gap:10px}
+  .edit-hint .btn{font-size:12px;padding:3px 11px}
+  .edit-hint kbd{background:var(--bg-soft);border:1px solid var(--line);border-radius:4px;
+    padding:1px 5px;font-family:inherit;font-size:11px}
+  .ml-edit{display:flex;flex-direction:column;gap:8px;min-width:0;max-width:100%}
+  /* Pendant l'édition d'un sélecteur (ref/liste), le champ prend toute la largeur et perd le fond de survol */
+  .prop.editing-wide{grid-column:1/-1;background:transparent!important}
+  .prop.editing-wide:hover{background:transparent}
+  /* Éditeur du dernier champ : remplit la hauteur restante */
+  .ml-edit.grow-edit{flex:1 1 auto;min-height:0}
+  /* Pendant l'édition d'un champ markdown : le bloc s'étire pour donner toute la hauteur à l'éditeur */
+  .body-block.editing-grow{flex:1 1 auto;display:flex;flex-direction:column;min-height:420px}
+  .body-block.editing-grow .body-head{flex:0 0 auto}
+  .ml-edit.grow-edit > div:first-child{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
+  .ml-edit.grow-edit .toastui-editor-defaultUI{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
+  .ml-preview{border:1px dashed var(--line-strong);border-radius:8px;padding:8px 10px;
+    background:var(--bg-soft)}
+  .ml-preview .lbl{font-size:11px;color:var(--ink-faint);text-transform:uppercase;
+    letter-spacing:.06em;margin-bottom:4px}
+  .editor-actions{display:flex;align-items:center;gap:8px;margin-top:6px}
+  .editor-actions .spacer{flex:1}
+  .btn{font:inherit;font-size:13px;padding:5px 13px;border-radius:6px;cursor:pointer;
+    border:1px solid var(--line-strong);background:var(--bg);color:var(--ink)}
+  .btn:hover{background:var(--bg-soft)}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  .btn.primary:hover{filter:brightness(1.06)}
+  /* Cadre Toast UI dans l'esthétique du widget */
+  .toastui-editor-defaultUI{border:1px solid var(--line-strong)!important;border-radius:8px;overflow:hidden}
+  .checks{display:flex;flex-wrap:wrap;gap:6px}
+  .checks label{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;
+    border:1px solid var(--line-strong);border-radius:11px;font-size:12.5px;cursor:pointer}
+  .checks input{accent-color:var(--accent)}
+  .ref-checks{max-height:210px;overflow:auto;flex-direction:column;flex-wrap:nowrap;
+    align-items:stretch;gap:2px;border:1px solid var(--line);border-radius:8px;padding:6px}
+  .ref-checks label{border:none;border-radius:6px;justify-content:flex-start}
+  .ref-checks label:hover{background:var(--bg-soft)}
+  /* Pièces jointes */
+  .attachs{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+  .attachs .ph{color:var(--ink-faint)}
+  .attach-file{display:inline-flex;align-items:center;gap:6px;max-width:100%;
+    padding:4px 10px;border:1px solid var(--line-strong);border-radius:8px;
+    font-size:13px;color:var(--ink);text-decoration:none;background:var(--bg)}
+  .attach-file:hover{background:var(--bg-soft)}
+  .attach-file svg{width:14px;height:14px;flex:0 0 14px;color:var(--ink-faint)}
+  .attach-file span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .attach-img{display:inline-block;border:1px solid var(--line);border-radius:8px;overflow:hidden;line-height:0}
+  .attach-img img{width:96px;height:96px;object-fit:cover;display:block}
+  .attach-img:hover{box-shadow:0 0 0 2px var(--accent-soft)}
+  .attach-file.pdf svg{color:#c0392b}
+  /* Visionneuse intégrée */
+  .viewer-ov{position:fixed;inset:0;z-index:9999;background:rgba(18,18,24,.74);
+    display:flex;flex-direction:column;padding:20px;gap:12px}
+  .viewer-bar{display:flex;align-items:center;gap:10px;color:#fff}
+  .viewer-bar .viewer-name{font-size:14px;font-weight:600;max-width:55%;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .viewer-bar .spacer{flex:1}
+  .viewer-bar .btn{background:rgba(255,255,255,.15);border-color:transparent;color:#fff;text-decoration:none}
+  .viewer-bar .btn:hover{background:rgba(255,255,255,.26)}
+  .viewer-body{flex:1;min-height:0;display:flex;align-items:center;justify-content:center}
+  .viewer-body img{max-width:100%;max-height:100%;object-fit:contain;border-radius:8px;background:#fff}
+  .viewer-body iframe{width:100%;height:100%;border:none;border-radius:8px;background:#fff}
+  .viewer-loading{color:#fff;font-size:14px}
+  .viewer-loading a{color:#fff}
+
+  /* Barre d'outils + configuration des champs repliés */
+  .toolbar{display:flex;justify-content:flex-end;margin-bottom:6px}
+  .gear{display:inline-flex;align-items:center;gap:6px;font:inherit;font-size:12.5px;
+    color:var(--ink-soft);background:transparent;border:1px solid transparent;
+    border-radius:6px;padding:4px 9px;cursor:pointer}
+  .gear:hover{background:var(--bg-soft);border-color:var(--line)}
+  .gear.active{background:var(--accent-soft);color:var(--accent);border-color:transparent}
+  .gear svg{width:15px;height:15px}
+  .config{border:1px solid var(--line-strong);border-radius:10px;padding:10px 12px;
+    margin-bottom:18px;background:var(--bg-soft)}
+  .config .ctitle{font-size:12px;color:var(--ink-faint);text-transform:uppercase;
+    letter-spacing:.06em;margin-bottom:8px}
+  .config .row{display:flex;align-items:center;gap:9px;padding:4px 4px;border-radius:6px;font-size:14px;background:var(--bg-soft)}
+  .config .row:hover{background:var(--bg)}
+  .config .row input{accent-color:var(--accent);width:15px;height:15px}
+  .config .row .grip{cursor:grab;color:var(--ink-faint);user-select:none;font-size:13px;line-height:1}
+  .config .row.dragging{opacity:.4}
+  .config .row.drop-before{box-shadow:inset 0 2px 0 var(--accent)}
+  .config .row.drop-after{box-shadow:inset 0 -2px 0 var(--accent)}
+  .config .row .nm{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .config .row .tag{font-size:11px;color:var(--ink-faint)}
+  /* Réglage des références multiples */
+  .rl-cfg{padding:6px 4px;border-top:1px solid var(--line)}
+  .rl-head{display:flex;align-items:center;gap:10px}
+  .rl-head .nm{flex:1;font-size:14px}
+  .seg{display:inline-flex;border:1px solid var(--line-strong);border-radius:7px;overflow:hidden}
+  .seg button{font:inherit;font-size:12px;padding:3px 10px;border:none;background:var(--bg);
+    color:var(--ink-soft);cursor:pointer}
+  .seg button.on{background:var(--accent);color:#fff}
+  .rl-cols{display:flex;flex-direction:column;gap:1px;margin:8px 0 2px;padding-left:2px}
+  .rl-col{display:flex;align-items:center;justify-content:space-between;gap:10px;
+    padding:2px 4px;border-radius:6px}
+  .rl-col.on{background:var(--bg-soft)}
+  .rl-col label{display:inline-flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;flex:1;min-width:0}
+  .rl-col label{color:var(--ink-faint)}
+  .rl-col.on label{color:var(--ink)}
+  .rl-cols input{accent-color:var(--accent);width:14px;height:14px;flex:none}
+  .rl-ord{display:inline-flex;gap:2px;flex:none}
+  .rl-move{font:inherit;font-size:12px;line-height:1;width:22px;height:20px;padding:0;
+    border:1px solid var(--line-strong);border-radius:5px;background:var(--bg);
+    color:var(--ink-soft);cursor:pointer}
+  .rl-move:hover:not(:disabled){background:var(--bg-soft)}
+  .rl-move:disabled{opacity:.3;cursor:default}
+  .cfg-ver{margin-top:12px;padding-top:8px;border-top:1px solid var(--line);
+    font-size:11px;color:var(--ink-faint)}
+  .cfg-io{display:flex;gap:8px;flex-wrap:wrap}
+  .cfg-io-note{font-size:11.5px;color:var(--ink-faint);margin-top:6px}
+
+  /* Section dépliable « Autres champs » */
+  details.folded{margin-top:18px;border-top:1px solid var(--line);padding-top:6px}
+  details.folded > summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:7px;
+    color:var(--ink-soft);font-size:13px;font-weight:500;padding:6px 4px;border-radius:6px;user-select:none}
+  details.folded > summary:hover{background:var(--bg-soft)}
+  details.folded > summary::-webkit-details-marker{display:none}
+  details.folded > summary .chev{transition:transform .15s}
+  details.folded[open] > summary .chev{transform:rotate(90deg)}
+  details.folded .folded-body{padding-top:4px}
+
+  /* Commentaires (lecture seule) */
+  .cmts{display:flex;flex-direction:column;gap:10px;padding-top:6px}
+  .cmt{border:1px solid var(--line);border-radius:8px;padding:8px 10px;background:var(--bg-soft)}
+  .cmt.resolved{opacity:.6}
+  .cmt-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px;font-size:12px}
+  .cmt-author{font-weight:600;color:var(--ink)}
+  .cmt-col{color:var(--ink-soft);background:var(--bg);border:1px solid var(--line);
+    border-radius:4px;padding:0 5px;font-size:11px}
+  .cmt-date{color:var(--ink-faint)}
+  .cmt-res{color:#3a7a3a;font-size:11px;border:1px solid #3a7a3a55;border-radius:4px;padding:0 5px}
+  .cmt-text{font-size:14px}
+  .cmt-text > :first-child{margin-top:0}
+  .cmt-text > :last-child{margin-bottom:0}
+
+  /* États vides / toast */
+  .empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;
+    text-align:center;color:var(--ink-faint);padding:70px 20px;gap:10px}
+  .empty-state svg{width:34px;height:34px;opacity:.6}
+  .toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%) translateY(20px);
+    background:var(--ink);color:var(--bg);padding:8px 16px;border-radius:8px;font-size:13px;
+    opacity:0;transition:opacity .18s,transform .18s;pointer-events:none;z-index:50}
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  .demo-banner{background:var(--accent-soft);color:var(--accent);font-size:12px;
+    text-align:center;padding:6px;border-radius:6px;margin-bottom:18px}
+
+  @media (prefers-reduced-motion: reduce){*{transition:none!important}}
+  @media (max-width:560px){
+    .prop{grid-template-columns:1fr;gap:1px}
+    .prop-label{padding-top:0} .title{font-size:25px}
+  }
+</style>
+</head>
+<body>
+  <div class="wrap" id="wrap">
+    <div class="empty-state" id="empty">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+        <rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
+      <div>Sélectionne une ligne dans la table pour afficher sa fiche.</div>
+    </div>
+  </div>
+  <div class="toast" id="toast"></div>
+
+<script>
+/* ============================================================
+   Widget Grist — Fiche détaillée (vue + édition), style Notion
+   ============================================================ */
+
+const WIDGET_BUILD = '2026-06-30 · 39';   // repère anti-cache, visible dans le panneau « Champs »
+const ICONS = {
+  text:'<path d="M4 7V5h16v2M9 5v14m-3 0h6"/>',
+  longtext:'<path d="M4 6h16M4 10h16M4 14h10M4 18h7"/>',
+  num:'<path d="M4 9h16M4 15h16M10 4l-2 16M16 4l-2 16"/>',
+  bool:'<rect x="3" y="6" width="18" height="12" rx="6"/><circle cx="9" cy="12" r="3"/>',
+  date:'<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M3 9h18M8 2v4M16 2v4"/>',
+  choice:'<path d="M4 6h10M4 12h16M4 18h7"/><circle cx="18" cy="6" r="2"/>',
+  ref:'<path d="M10 13a5 5 0 0 0 7 0l2-2a5 5 0 0 0-7-7l-1 1M14 11a5 5 0 0 0-7 0l-2 2a5 5 0 0 0 7 7l1-1"/>',
+  copy:'<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
+  external:'<path d="M14 3h7v7M21 3l-9 9M19 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5"/>',
+  check:'<path d="M20 6L9 17l-5-5"/>',
+  pencil:'<path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
+  link:'<path d="M10 13a5 5 0 0 0 7 0l2-2a5 5 0 0 0-7-7l-1 1M14 11a5 5 0 0 0-7 0l-2 2a5 5 0 0 0 7 7l1-1"/>',
+  attach:'<path d="M21.4 11.05 12.25 20.2a5 5 0 0 1-7.07-7.07l9.19-9.19a3 3 0 0 1 4.24 4.24l-9.2 9.19a1 1 0 0 1-1.41-1.41l8.48-8.49"/>',
+};
+function icon(kind){
+  return `<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${ICONS[kind]||ICONS.text}</svg>`;
+}
+
+marked.setOptions({breaks:true, gfm:true});
+
+/* Tolérance façon Notion : resserre un espace parasite à l'intérieur d'une paire
+   **…** ou __…__ (le markdown strict laisserait les marqueurs visibles).
+   Ne touche pas au code, aux puces, à l'italique ni au texte autour. */
+function tidyEmphasis(src){
+  if(src==null) return src;
+  const code=[];
+  let s = String(src)
+    .replace(/```[\s\S]*?```/g, m=>(code.push(m), `\u0000${code.length-1}\u0000`))
+    .replace(/`[^`\n]*`/g,      m=>(code.push(m), `\u0000${code.length-1}\u0000`));
+  s = s
+    .replace(/\*\*([^\n*]*?)\*\*/g, (m,inner)=>{const t=inner.trim();return t?'**'+t+'**':m;})
+    .replace(/__([^\n_]*?)__/g,     (m,inner)=>{const t=inner.trim();return t?'__'+t+'__':m;});
+  return s.replace(/\u0000(\d+)\u0000/g,(_,i)=>code[+i]);
+}
+
+// Retire les échappements markdown (\# \* \_ \> …) ajoutés par l'éditeur WYSIWYG,
+// pour que les titres/gras saisis comme tels soient rendus. Préserve le code.
+function unescapeMd(src){
+  if(src==null) return src;
+  const code=[];
+  let s = String(src)
+    .replace(/```[\s\S]*?```/g, m=>(code.push(m), `\u0002${code.length-1}\u0002`))
+    .replace(/`[^`\n]*`/g,      m=>(code.push(m), `\u0002${code.length-1}\u0002`));
+  s = s.replace(/\\([#*_>~`[\]()+.!\-])/g, '$1');
+  return s.replace(/\u0002(\d+)\u0002/g,(_,i)=>code[+i]);
+}
+function renderMd(src){
+  if(src==null||src==='') return '';
+  return DOMPurify.sanitize(marked.parse(tidyEmphasis(unescapeMd(String(src)))));
+}
+
+/* À l'enregistrement : corrige le markdown produit par l'éditeur WYSIWYG quand un
+   espace se retrouve à l'intérieur des marqueurs (**texte ** → **texte** ), en
+   poussant l'espace dehors. Épargne le code et les lignes de liste. */
+function normalizeEmphasis(src){
+  if(src==null) return src;
+  const code=[];
+  let s=String(src)
+    .replace(/```[\s\S]*?```/g,m=>(code.push(m),`\u0000${code.length-1}\u0000`))
+    .replace(/`[^`\n]*`/g,     m=>(code.push(m),`\u0000${code.length-1}\u0000`));
+  const mv = mk => (m,inner)=>{
+    const lead =(inner.match(/^\s+/)||[''])[0];
+    const trail=(inner.match(/\s+$/)||[''])[0];
+    const core =inner.slice(lead.length, inner.length-trail.length);
+    return core ? lead+mk+core+mk+trail : m;
+  };
+  s = s.split('\n').map(line=>{
+    let l = line
+      .replace(/\*\*([^*]*?)\*\*/g, mv('**'))
+      .replace(/__([^_]*?)__/g,     mv('__'))
+      .replace(/~~([^~]*?)~~/g,     mv('~~'));
+    if(!/^\s*([*+-]|\d+[.)])\s/.test(line)){      // pas une ligne de liste
+      l = l.replace(/(?<!\*)\*([^*]*?)\*(?!\*)/g, mv('*'))
+           .replace(/(?<!_)_([^_]*?)_(?!_)/g,     mv('_'));
+    }
+    return l;
+  }).join('\n');
+  return s.replace(/\u0000(\d+)\u0000/g,(_,i)=>code[+i]);
+}
+
+const $ = (s,el=document)=>el.querySelector(s);
+const wrap = $('#wrap'), emptyEl = $('#empty'), toastEl = $('#toast');
+let toastT;
+function toast(msg){
+  toastEl.textContent=msg; toastEl.classList.add('show');
+  clearTimeout(toastT); toastT=setTimeout(()=>toastEl.classList.remove('show'),1600);
+}
+
+/* ---- État courant ---- */
+let META = null;          // {colId: {label,type,widgetOptions,isFormula,order,rules}}
+let REFMAP = {};          // {colRef(number): colId}  — colonnes de la table courante (règles)
+let COLREF = {};          // {colRef(number): colId}  — TOUTES les colonnes (pour résoudre visibleCol)
+let REFCACHE = {};        // {tableId: [{id,label}, …]} — options de référence en cache
+let REFROWS = {};         // {tableId: table colonnaire} — lignes des tables liées (sous-tableaux)
+let CURRENT = null;       // ligne courante {id, ...fields}
+let TABLE_ID = null;
+let TABLE_REF = null;       // ref de la table courante dans _grist_Tables (pour les commentaires)
+let ALL_CELLS = null;       // cache de _grist_Cells (commentaires)
+let COMMENTS = [];          // commentaires de la ligne courante
+let NAV = [];               // pile de navigation : {tableId, rowId}
+let BASE_RECORD = null;     // dernier enregistrement reçu du curseur Grist
+let IN_GRIST = false;
+let editingKey = null;    // colId en cours d'édition
+let FOLDED = new Set();    // colIds repliés dans « Autres champs »
+let ORDER = [];            // ordre personnalisé des champs (glisser-déposer)
+let TITLE_KEY = null;      // colId forcé comme titre (null = détection automatique)
+let SUBTITLE_KEY = null;   // colId affiché en sous-titre (null = aucun)
+let TAGS_KEY = null;       // colId affiché en pastilles dans l'en-tête (null = aucun)
+let HEADER_IMG = null;     // colId d'une image d'en-tête (pièce jointe ou URL) — null = aucune
+let RL_MODE = {};          // {colId: 'chips'|'table'} affichage des références multiples (défaut: table)
+let RL_COLS = {};          // {colId: [colId cible…]} colonnes affichées en mode tableau (vide = 6 premières)
+let LINK_KEY = 'auto';     // colonne du lien partageable (SELF_HYPERLINK) : 'auto' | 'none' | colId
+let LINK_TEMPLATE = '';    // modèle de lien d'ancrage collé (Ctrl+Shift+A) : le n° de ligne y est remplacé
+let configuring = false;   // mode configuration (cases à cocher)
+let foldOpen = false;      // état ouvert/fermé du <details>
+
+/* ---- Helpers type ---- */
+function baseType(t){ return (t||'Text').split(':')[0]; }
+function typeKind(t){
+  const b = baseType(t);
+  if(b==='Numeric'||b==='Int') return 'num';
+  if(b==='Bool') return 'bool';
+  if(b==='Date'||b==='DateTime') return 'date';
+  if(b==='Choice') return 'choice';
+  if(b==='ChoiceList') return 'choicelist';
+  if(b==='Ref') return 'ref';
+  if(b==='RefList') return 'reflist';
+  if(b==='Attachments') return 'attach';
+  return 'text';
+}
+function iconKind(t,isLong){
+  const k=typeKind(t);
+  if(k==='choice'||k==='choicelist') return 'choice';
+  if(k==='num') return 'num';
+  if(k==='bool') return 'bool';
+  if(k==='date') return 'date';
+  if(k==='ref'||k==='reflist') return 'ref';
+  if(k==='attach') return 'attach';
+  return isLong?'longtext':'text';
+}
+function parseWO(s){ try{ return s? JSON.parse(s):{}; }catch(_){ return {}; } }
+
+/* Lecture seule = vraie colonne formule (formule non vide). Une colonne vide
+   (formule vide) reste éditable. */
+function isReadonly(m){ return !!(m && m.isFormula && String(m.formula||'').trim() !== ''); }
+
+/* Style d'une cellule = style par défaut (widgetOptions) + règles conditionnelles
+   dont le résultat (booléen) pour la ligne courante arrive dans gristHelper_ConditionalRule… */
+// N'accepte qu'une couleur CSS sûre (évite toute injection via les options de colonne)
+function safeColor(c){
+  if(typeof c!=='string') return '';
+  const s = c.trim();
+  if(/^#[0-9a-fA-F]{3,8}$/.test(s)) return s;
+  if(/^rgba?\(\s*[\d.,\s%]+\)$/i.test(s)) return s;
+  if(/^hsla?\(\s*[\d.,\s%]+\)$/i.test(s)) return s;
+  if(/^[a-zA-Z]{1,20}$/.test(s)) return s;   // noms de couleur CSS
+  return '';
+}
+function styleToCss(o){
+  if(!o) return '';
+  let css='';
+  const bg=safeColor(o.fillColor), fg=safeColor(o.textColor);
+  if(bg) css+=`background:${bg};`;
+  if(fg) css+=`color:${fg};`;
+  if(o.fontBold) css+='font-weight:600;';
+  if(o.fontItalic) css+='font-style:italic;';
+  let deco=[];
+  if(o.fontUnderline) deco.push('underline');
+  if(o.fontStrikethrough) deco.push('line-through');
+  if(deco.length) css+=`text-decoration:${deco.join(' ')};`;
+  return css;
+}
+// Style d'une cellule pour une colonne donnée.
+// colMeta : méta de la colonne (wo + rules). refmap : {colRef→colId} de la table
+// concernée. isRuleTrue(helperColId) : la règle conditionnelle est-elle vraie pour
+// la ligne visée ? (permet de réutiliser la logique pour les lignes de sous-tableau)
+function styleForCol(colMeta, refmap, isRuleTrue){
+  if(!colMeta) return '';
+  const wo = colMeta.wo || {};
+  // 1) style par défaut
+  const merged = { fillColor:wo.fillColor, textColor:wo.textColor,
+    fontBold:wo.fontBold, fontItalic:wo.fontItalic,
+    fontUnderline:wo.fontUnderline, fontStrikethrough:wo.fontStrikethrough };
+  // 2) règles conditionnelles : rules = ['L', ref1, ref2…], rulesOptions parallèle
+  const ruleRefs = Array.isArray(colMeta.rules) ? colMeta.rules.slice(1) : [];
+  const ruleStyles = wo.rulesOptions || [];
+  ruleRefs.forEach((ref, i)=>{
+    const helperCol = refmap && refmap[ref];
+    if(!helperCol) return;
+    if(isRuleTrue(helperCol)){                   // règle vraie pour cette ligne
+      const rs = ruleStyles[i] || {};
+      ['fillColor','textColor'].forEach(k=>{ if(rs[k]) merged[k]=rs[k]; });
+      ['fontBold','fontItalic','fontUnderline','fontStrikethrough'].forEach(k=>{
+        if(k in rs) merged[k]=rs[k];
+      });
+    }
+  });
+  return styleToCss(merged);
+}
+function cellStyle(colId){
+  const m = META?.[colId]; if(!m) return '';
+  return styleForCol(m, REFMAP, hc => CURRENT && CURRENT[hc]===true);
+}
+
+/* Heuristique : un champ texte est-il un "bloc document" (multi-ligne / markdown) ? */
+function isLongText(colId, type, val){
+  if(typeKind(type)!=='text') return false;
+  const wo = META?.[colId]?.wo || {};
+  if(wo.widget==='HyperLink') return false;   // un lien reste inline (cliquable)
+  if(wo.widget==='Markdown' || wo.wrap) return true;
+  const s = (val==null)?'':String(val);
+  return s.includes('\n') || s.length > 90;
+}
+
+// Rendu d'une cellule HyperLink Grist : "libellé url" → l'URL est le dernier token
+function linkHref(val){
+  const s = String(val==null?'':val).trim();
+  if(!s) return '';
+  const parts = s.split(/\s+/);
+  let href = parts[parts.length-1];
+  if(!/^[a-z][a-z0-9+.-]*:/i.test(href)) href = 'https://'+href;
+  if(/^(javascript|data|vbscript):/i.test(href)) return '';
+  return href;
+}
+function hyperlinkHtml(val){
+  const s = String(val==null?'':val).trim();
+  if(!s) return '';
+  const parts = s.split(/\s+/);
+  const url = parts[parts.length-1];
+  const label = parts.length>1 ? parts.slice(0,-1).join(' ') : url;
+  const href = linkHref(val);
+  if(!href) return escapeHtml(s);   // pas une URL sûre → texte brut
+  return `<a class="lk" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a>`;
+}
+
+// Texte à copier pour une cellule
+function copyValue(k){
+  const m = META?.[k]||{}; const v = CURRENT[k];
+  if((m.wo||{}).widget==='HyperLink') return linkHref(v) || String(v==null?'':v);
+  const kind = typeKind(m.type);
+  if(kind==='text'||kind==='num') return v==null?'':String(v);
+  return plainValue(k);
+}
+// Barre d'actions au survol (éditer / ouvrir / copier)
+function cellActions(k, {copy=true, open=false, edit=false}={}){
+  let btns = '';
+  if(edit) btns += `<span class="cell-act" data-edit-key="${escapeHtml(k)}" title="Modifier">${icon('pencil')}</span>`;
+  if(open) btns += `<span class="cell-act" data-open-key="${escapeHtml(k)}" title="Ouvrir le lien">${icon('external')}</span>`;
+  if(copy) btns += `<span class="cell-act" data-copy-key="${escapeHtml(k)}" title="Copier">${icon('copy')}</span>`;
+  return btns ? `<span class="cell-actions">${btns}</span>` : '';
+}
+// Pastille de référence, cliquable pour ouvrir l'enregistrement lié
+function refChip(target, id, label){
+  const ok = target && (typeof id==='number') && id>0;
+  const attrs = ok ? `data-open-ref="${escapeHtml(target)}" data-open-row="${id}"` : '';
+  return `<span class="chip ${ok?'ref-open':''}" ${attrs}>${escapeHtml(String(label))}${ok?' <span class="op">↗</span>':''}</span>`;
+}
+
+/* ---- Formatage des valeurs (mode lecture) ---- */
+function fmtDate(v,type){
+  if(v==null||v==='') return '';
+  const ms = (typeof v==='number')? v*1000 : Date.parse(v);
+  if(isNaN(ms)) return String(v);
+  const d=new Date(ms);
+  const opt = baseType(type)==='DateTime'
+    ? {day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}
+    : {day:'2-digit',month:'long',year:'numeric'};
+  return d.toLocaleDateString('fr-FR',opt);
+}
+function asList(v){ // ChoiceList encodé ['L', a, b]
+  if(Array.isArray(v)) return v[0]==='L'? v.slice(1) : v.slice();
+  if(v==null||v==='') return [];
+  return [v];
+}
+function chipHtml(label, wo){
+  const co = (wo.choiceOptions||{})[label] || {};
+  const bg = safeColor(co.fillColor) || '#e9e7e4';
+  const fg = safeColor(co.textColor) || '#34302c';
+  return `<span class="chip" style="background:${bg};color:${fg}">${escapeHtml(label)}</span>`;
+}
+function escapeHtml(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+
+/* ---- Références ---- */
+// Valeur du lien partageable (colonne SELF_HYPERLINK), selon réglage ou auto-détection
+function linkValueFor(){
+  // 1) Modèle collé (Ctrl+Shift+A) : on remplace juste le numéro de ligne → marche sur toutes les tables, sans formule.
+  //    Uniquement sur la fiche de base (pas en navigation, où la section ne correspondrait pas).
+  if(LINK_TEMPLATE && CURRENT && CURRENT.id!=null && (typeof NAV==='undefined' || NAV.length===0)){
+    if(/#a\d+\.s\d+\.r\d+/.test(LINK_TEMPLATE)) return LINK_TEMPLATE.replace(/(#a\d+\.s\d+\.r)\d+/, '$1'+CURRENT.id);
+  }
+  if(LINK_KEY==='none') return null;
+  let raw = null;
+  if(LINK_KEY && LINK_KEY!=='auto'){ raw = CURRENT ? CURRENT[LINK_KEY] : null; }
+  else if(CURRENT){
+    for(const k in CURRENT){
+      if(k==='id' || k.startsWith('gristHelper_')) continue;
+      const v = CURRENT[k];
+      if(typeof v==='string' && /#a\d+\.s\d+\.r/.test(v)){ raw = v; break; }
+    }
+  }
+  if(raw==null || raw==='') return null;
+  const s = String(raw).trim();
+  const parts = s.split(/\s+/);
+  const url = parts.find(p=>/#a\d+\.s/.test(p)) || parts[parts.length-1];
+  return /^https?:/i.test(url) ? url : (/#a\d+\.s/.test(s) ? s : null);
+}
+
+// Image d'en-tête (logo / photo) depuis une colonne pièce jointe ou URL
+function headerImgHtml(){
+  if(!HEADER_IMG || !CURRENT) return '';
+  const m = META?.[HEADER_IMG]; if(!m) return '';
+  const val = CURRENT[HEADER_IMG];
+  if(typeKind(m.type)==='attach'){
+    const ids = asList(val).filter(x=>x!=null && x!=='');
+    if(!ids.length) return '';
+    return `<span class="head-img head-img-pending" data-head-attach="${escapeHtml(String(ids[0]))}"></span>`;
+  }
+  const url = linkHref(val) || (typeof val==='string' ? val.trim() : '');
+  if(url && /^(https?:\/\/|data:image\/)/i.test(url)) return `<span class="head-img"><img src="${escapeHtml(url)}" alt="" loading="lazy"></span>`;
+  return '';
+}
+
+function refTarget(type){ return (type||'').split(':')[1] || ''; }
+
+// Accès aux pièces jointes : jeton d'accès du document (mis en cache le temps de sa validité)
+let _attachTok=null, _attachExp=0;
+async function attachAuth(){
+  if(!IN_GRIST) return null;
+  const now=Date.now();
+  if(_attachTok && now < _attachExp-5000) return _attachTok;
+  try{
+    const t = await grist.docApi.getAccessToken({readOnly:true});
+    _attachTok = { baseUrl:t.baseUrl, token:t.token };
+    _attachExp = now + (t.ttlMsecs||60000);
+    return _attachTok;
+  }catch(e){ console.warn('Jeton pièce jointe indisponible', e); return null; }
+}
+function attachUrl(a, id, download){
+  return `${a.baseUrl}/attachments/${id}${download?'/download':''}?auth=${encodeURIComponent(a.token)}`;
+}
+// Remplit les conteneurs de pièces jointes après le rendu (asynchrone).
+async function hydrateAttachments(){
+  const nodes = wrap.querySelectorAll('.attachs[data-pending]');
+  const heads = wrap.querySelectorAll('.head-img-pending[data-head-attach]');
+  if(!nodes.length && !heads.length) return;
+  const a = await attachAuth();
+  for(const h of heads){
+    h.classList.remove('head-img-pending');
+    if(a) h.innerHTML = `<img src="${attachUrl(a, h.dataset.headAttach, true)}" alt="" loading="lazy">`;
+  }
+  for(const node of nodes){
+    node.removeAttribute('data-pending');
+    const ids = (node.dataset.ids||'').split(',').filter(Boolean);
+    if(!ids.length){ node.innerHTML='<span class="ph">Vide</span>'; continue; }
+    if(!a){ node.innerHTML = ids.map(id=>`<span class="attach-file">${icon('attach')}<span>Fichier #${escapeHtml(id)}</span></span>`).join(''); continue; }
+    const parts = await Promise.all(ids.map(async id=>{
+      let name='';
+      try{ const m = await (await fetch(attachUrl(a,id,false))).json(); name = m && m.fileName || ''; }catch(_){}
+      if(!name) name = 'fichier-'+id;
+      const dl = attachUrl(a, id, true);
+      const isImg = /\.(png|jpe?g|gif|webp|bmp|svg|avif)$/i.test(name);
+      const isPdf = /\.pdf$/i.test(name);
+      if(isImg) return `<a class="attach-img" data-view="img" data-url="${escapeHtml(dl)}" data-name="${escapeHtml(name)}" href="${dl}" target="_blank" rel="noopener" title="${escapeHtml(name)}"><img src="${dl}" alt="${escapeHtml(name)}" loading="lazy"></a>`;
+      if(isPdf) return `<a class="attach-file pdf" data-view="pdf" data-url="${escapeHtml(dl)}" data-name="${escapeHtml(name)}" href="${dl}" target="_blank" rel="noopener" title="${escapeHtml(name)}">${icon('attach')}<span>${escapeHtml(name)}</span></a>`;
+      return `<a class="attach-file" href="${dl}" target="_blank" rel="noopener" title="Télécharger ${escapeHtml(name)}">${icon('attach')}<span>${escapeHtml(name)}</span></a>`;
+    }));
+    node.innerHTML = parts.join('');
+    node.querySelectorAll('[data-view]').forEach(el2=>el2.addEventListener('click', e=>{
+      if(e.metaKey||e.ctrlKey||e.shiftKey||e.button===1) return;   // laisse ouvrir dans un onglet
+      e.preventDefault();
+      openAttachViewer(el2.dataset.url, el2.dataset.name, el2.dataset.view);
+    }));
+  }
+}
+
+// Visionneuse intégrée pour images et PDF
+function openAttachViewer(url, name, kind){
+  const ov = document.createElement('div'); ov.className='viewer-ov';
+  ov.innerHTML = `<div class="viewer-bar">
+      <span class="viewer-name">${escapeHtml(name||'')}</span><span class="spacer"></span>
+      <a class="btn" href="${escapeHtml(url)}" target="_blank" rel="noopener" download>Télécharger</a>
+      <button class="btn" data-act="close">Fermer ✕</button>
+    </div>
+    <div class="viewer-body"></div>`;
+  document.body.appendChild(ov);
+  const body = ov.querySelector('.viewer-body');
+  let obj = null;
+  const onKey = e=>{ if(e.key==='Escape') close(); };
+  const close = ()=>{ ov.remove(); document.removeEventListener('keydown', onKey); if(obj) URL.revokeObjectURL(obj); };
+  document.addEventListener('keydown', onKey);
+  ov.addEventListener('click', e=>{ if(e.target===ov) close(); });
+  ov.querySelector('[data-act="close"]').addEventListener('click', close);
+  if(kind==='img'){
+    body.innerHTML = `<img src="${escapeHtml(url)}" alt="${escapeHtml(name||'')}">`;
+  } else {
+    body.innerHTML = `<div class="viewer-loading">Chargement…</div>`;
+    (async()=>{
+      try{
+        const r = await fetch(url); if(!r.ok) throw 0;
+        obj = URL.createObjectURL(await r.blob());
+        body.innerHTML = `<iframe src="${obj}" title="${escapeHtml(name||'')}"></iframe>`;
+      }catch(_){
+        body.innerHTML = `<div class="viewer-loading">Aperçu impossible ici — <a href="${escapeHtml(url)}" target="_blank" rel="noopener">ouvrir dans un onglet</a></div>`;
+      }
+    })();
+  }
+}
+// Référence calculée encodée par Grist : ['R', tableId, rowId] (formules, colonnes Any)
+function asReference(v){
+  if(Array.isArray(v) && v[0]==='R' && v.length>=3){
+    const id = +v[2];
+    if(!isNaN(id) && id>0) return { target:String(v[1]), id };
+  }
+  return null;
+}
+// Liste de références calculée : ['r', tableId, [rowId, …]]
+function asReferenceList(v){
+  if(Array.isArray(v) && v[0]==='r' && v.length>=3 && Array.isArray(v[2])){
+    const ids = v[2].map(x=>+x).filter(x=>!isNaN(x) && x>0);
+    return { target:String(v[1]), ids };
+  }
+  return null;
+}
+// Méta de la table cible d'une référence (depuis le cache, ou construite si les métatables sont chargées)
+function targetMeta(tableId){
+  if(!tableId) return null;
+  if(META_CACHE[tableId]) return META_CACHE[tableId].META;
+  if(METATABLES){ try{ return buildMetaFor(tableId).META; }catch(_){ return null; } }
+  return null;
+}
+function refFirstTextCol(t){
+  return Object.keys(t).find(c=> c!=='id' && !c.startsWith('gristHelper_') && c!=='manualSort') || 'id';
+}
+// Options {id,label} de la table cible (en cache). Démo : lit DEMO_REFS.
+async function refOptions(target, visibleColId){
+  if(!target) return [];
+  if(REFCACHE[target]) return REFCACHE[target];
+  let opts = [];
+  try{
+    if(IN_GRIST){
+      const t = await grist.docApi.fetchTable(target);
+      const ids = t.id || [];
+      const labelCol = (visibleColId && t[visibleColId]) ? visibleColId : refFirstTextCol(t);
+      opts = ids.map((id,i)=>({ id, label: String((t[labelCol]||[])[i] ?? id) }));
+    } else if(typeof DEMO_REFS!=='undefined' && DEMO_REFS[target]){
+      opts = DEMO_REFS[target].slice();
+    }
+  }catch(e){ console.warn('Lecture de la table de référence impossible', target, e); }
+  opts.sort((a,b)=> a.label.localeCompare(b.label,'fr'));
+  REFCACHE[target] = opts;
+  return opts;
+}
+// Libellé d'un id de référence à partir du cache (repli si pas de gristHelper_Display)
+function refLabelFor(key, id){
+  const target = refTarget(META?.[key]?.type);
+  const cache = REFCACHE[target] || (typeof DEMO_REFS!=='undefined'? DEMO_REFS[target]:null);
+  if(cache){ const f = cache.find(o=>o.id===id); if(f) return f.label; }
+  return null;
+}
+
+
+/* ============================================================
+   Rendu de la fiche
+   ============================================================ */
+function bodyBlock(k, grow){
+  const m = META?.[k] || {};
+  const label = m.label || k;
+  const raw = CURRENT[k];
+  const empty = raw==null || String(raw).trim()==='';
+  const stl = cellStyle(k);
+  const ro = isReadonly(m);
+  const roAttr = ro ? `data-ro="1" title="Colonne calculée (formule) — non modifiable ici"` : 'data-md="1"';
+  const ph = empty ? (ro ? 'Vide' : 'Vide — cliquer pour écrire (markdown supporté)') : '';
+  return `<div class="body-block ${grow?'grow':''}">
+      <div class="body-head">${icon('longtext')}<span>${escapeHtml(label)}</span></div>
+      <div class="md ${empty?'placeholder':''}" data-key="${k}" ${roAttr} ${stl?`style="${stl}"`:''}>${
+        empty ? ph : renderMd(raw)
+      }</div>
+    </div>`;
+}
+
+// Valeur courte pour une cellule de sous-tableau (table liée)
+function fmtScalar(meta, value){
+  const t = meta.type||'Text'; const kind = typeKind(t);
+  if(value==null||value==='') return '';
+  if(kind==='date') return escapeHtml(fmtDate(value,t));
+  if(kind==='bool') return value?'Oui':'Non';
+  if(kind==='choice') return `<span class="chip">${escapeHtml(String(value))}</span>`;
+  if(kind==='choicelist') return asList(value).map(c=>`<span class="chip">${escapeHtml(String(c))}</span>`).join(' ');
+  if(kind==='ref'){
+    const tt = refTarget(t); const cache = REFCACHE[tt];
+    if(typeof value==='number'){ const f = cache && cache.find(o=>o.id===value); return escapeHtml(f? f.label : ('#'+value)); }
+    return escapeHtml(String(value));
+  }
+  if(kind==='reflist'){ return escapeHtml(asList(value).filter(x=>x!=null&&x!=='').length+' lié(s)'); }
+  return escapeHtml(String(value));
+}
+
+// Résout les lignes référencées d'une RefList : {rowId, ri (index dans REFROWS), label}
+function reflistRows(k, target){
+  const trows = REFROWS[target] || {};
+  const tids = trows.id || [];
+  const idIndex = new Map(tids.map((id,i)=>[String(id), i]));
+  const raw = asList(CURRENT[k]).filter(x=>x!=null && x!=='');
+  const dispHelper = CURRENT['gristHelper_Display'+capitalize(k)] ?? CURRENT['gristHelper_Display'];
+  const labels = Array.isArray(dispHelper) ? asList(dispHelper) : [];
+  const visCol = COLREF[META?.[k]?.visibleCol] || null;   // colonne d'affichage de la table cible
+  return raw.map((v,i)=>{
+    let rowId=null, ri=null;
+    if(typeof v==='number'){
+      rowId=v; const j=idIndex.get(String(v)); ri = (j===undefined)?null:j;
+    } else {
+      const lab=String(v); const n=Number(v);
+      if(!isNaN(n) && idIndex.has(String(n))){ rowId=n; ri=idIndex.get(String(n)); }
+      else if(visCol && trows[visCol]){       // v est un libellé : on cherche la ligne par colonne visible
+        const j = trows[visCol].findIndex(x=>String(x)===lab);
+        if(j>=0){ ri=j; rowId=tids[j]; }
+      }
+    }
+    const label = (labels[i]!=null && labels[i]!=='') ? labels[i] : (rowId!=null?rowId:v);
+    return { rowId, ri, label };
+  });
+}
+
+// Bloc « références multiples » en sous-tableau (colonnes de la table liée)
+function subtableBlock(k){
+  const m = META?.[k]||{};
+  const target = refTarget(m.type);
+  const ids = asList(CURRENT[k]).filter(x=>x!=null && x!=='');
+  const label = m.label || k;
+  const head = `<div class="body-head">${icon('ref')}<span>${escapeHtml(label)}</span> <span class="st-count">${ids.length}</span></div>`;
+  const tcache = META_CACHE[target], trows = REFROWS[target];
+  if(!tcache || !trows){   // pas encore préchargé : repli en pastilles cliquables
+    const chips = ids.map(id=>refChip(target, (typeof id==='number'?id:null), refLabelFor(k,id) ?? id)).join('');
+    return `<div class="body-block">${head}<div class="chips">${chips||'<span class="placeholder">Vide</span>'}</div></div>`;
+  }
+  const tmeta = tcache.META;
+  const ordered = Object.keys(tmeta).sort((a,b)=>(tmeta[a].order??0)-(tmeta[b].order??0));
+  let cols;
+  if(RL_COLS[k] && RL_COLS[k].length){
+    const valid = new Set(ordered);
+    cols = RL_COLS[k].filter(c=>valid.has(c));   // respecte l'ordre choisi par l'utilisateur
+  } else {
+    cols = ordered.slice(0,6);
+  }
+  const rows = reflistRows(k, target);
+  const header = `<tr><th class="st-openh"></th>${cols.map(c=>`<th>${escapeHtml(tmeta[c].label||c)}</th>`).join('')}</tr>`;
+  const trefmap = tcache.REFMAP;   // {colRef→colId} de la table cible, pour les règles
+  const body = rows.slice(0,50).map(r=>{
+    // évaluation des règles conditionnelles pour CETTE ligne liée (helper booléens du cache)
+    const isRuleTrue = (r.ri!=null)
+      ? (hc => trows[hc] && trows[hc][r.ri]===true)
+      : (()=>false);
+    const cells = cols.map((c,ci)=>{
+      let v = (r.ri!=null && trows[c]) ? trows[c][r.ri] : null;
+      const cm = tmeta[c]; const wo = cm.wo||{};
+      const kind = typeKind(cm.type);
+      // style de cellule (défaut + règles conditionnelles), repris comme sur la fiche
+      const stl = styleForCol(cm, trefmap, isRuleTrue);
+      const sty = stl ? ` style="${stl}"` : '';
+      // ligne introuvable dans le cache : afficher au moins le libellé dans la 1re colonne
+      if(r.ri==null && ci===0 && (v==null||v==='')) return `<td${sty}>${escapeHtml(String(r.label))}</td>`;
+      // Choix : pastilles colorées (choiceOptions), comme sur la fiche
+      if(kind==='choice'){
+        return `<td${sty}>${(v==null||v==='')?'':chipHtml(String(v), wo)}</td>`;
+      }
+      if(kind==='choicelist'){
+        const labs = asList(v).filter(x=>x!=null && x!=='');
+        return `<td${sty}>${labs.map(cv=>chipHtml(String(cv), wo)).join(' ')}</td>`;
+      }
+      // Références : afficher la colonne d'affichage configurée (gristHelper_Display fournie par Grist)
+      if(kind==='ref' || kind==='reflist'){
+        const dispCol = COLREF[cm.displayCol];
+        let dv = (dispCol && trows[dispCol] && r.ri!=null) ? trows[dispCol][r.ri] : null;
+        if(dv==null){ dv = v; }   // repli : valeur brute
+        if(kind==='reflist'){
+          const labs = asList(dv).filter(x=>x!=null && x!=='');
+          return `<td${sty}>${labs.length? labs.map(l=>`<span class="chip">${escapeHtml(String(l))}</span>`).join(' ') : ''}</td>`;
+        }
+        return `<td${sty}>${(dv==null||dv==='')?'':`<span class="chip">${escapeHtml(String(dv))}</span>`}</td>`;
+      }
+      const s = (v==null)?'':String(v);
+      const longCell = kind==='text' && (wo.widget==='Markdown' || wo.wrap || s.includes('\n') || s.length>60);
+      if(longCell && s) return `<td class="st-wrap"${sty}><div class="st-md">${renderMd(s)}</div></td>`;
+      return `<td${sty}>${fmtScalar(cm, v)}</td>`;
+    }).join('');
+    const open = (r.rowId!=null)
+      ? `<span class="ref-open st-open" data-open-ref="${escapeHtml(target)}" data-open-row="${r.rowId}" title="Ouvrir">⤢</span>` : '';
+    return `<tr><td class="st-openc">${open}</td>${cells}</tr>`;
+  }).join('');
+  const more = rows.length>50 ? `<div class="st-more">+${rows.length-50} autres…</div>` : '';
+  return `<div class="body-block subtable-block">${head}
+     <div class="subtable-wrap"><table class="subtable"><thead>${header}</thead><tbody>${body}</tbody></table></div>${more}</div>`;
+}
+
+function render(){
+  editingKey = null;   // un re-rendu détruit tout éditeur ouvert : on ne reste jamais "coincé"
+  if(!CURRENT){ wrap.innerHTML=''; wrap.appendChild(emptyEl); emptyEl.style.display='flex'; return; }
+  emptyEl.style.display='none';
+
+  // Ordre des colonnes : personnalisé (glisser-déposer) sinon ordre Grist
+  const keys = Object.keys(CURRENT).filter(k=>k!=='id' && !k.startsWith('gristHelper_') && !k.startsWith('manualSort'));
+  const opos = new Map(ORDER.map((k,i)=>[k,i]));
+  keys.sort((a,b)=>{
+    const pa = opos.has(a)? opos.get(a) : 1e6 + (META?.[a]?.order??0);
+    const pb = opos.has(b)? opos.get(b) : 1e6 + (META?.[b]?.order??0);
+    return pa-pb;
+  });
+
+  // Titre : choix explicite s'il existe encore, sinon 1er champ texte court non replié
+  const titleKey = (TITLE_KEY && META?.[TITLE_KEY] && keys.includes(TITLE_KEY))
+    ? TITLE_KEY
+    : keys.find(k=> !FOLDED.has(k)
+        && typeKind(META?.[k]?.type||'Text')==='text'
+        && !isLongText(k, META?.[k]?.type, CURRENT[k]));
+
+  // Sous-titre et tags : colonnes promues dans l'en-tête (distinctes du titre)
+  const promoted = new Set(); if(titleKey) promoted.add(titleKey);
+  const pick = sel => (sel && META?.[sel] && keys.includes(sel) && !promoted.has(sel)) ? (promoted.add(sel), sel) : null;
+  const subtitleKey = pick(SUBTITLE_KEY);
+  const tagsKey = pick(TAGS_KEY);
+
+  const propKeys=[], bodyKeys=[], foldedProps=[], foldedBody=[];
+  const isSubtable = (k)=>{
+    if(typeKind(META?.[k]?.type||'Text')!=='reflist') return false;
+    if((RL_MODE[k]||'table')!=='table') return false;   // mode « labels » : reste en pastilles
+    return asList(CURRENT[k]).filter(x=>x!=null && x!=='').length>0;
+  };
+  keys.forEach(k=>{
+    if(promoted.has(k)) return;   // titre / sous-titre / tags : affichés dans l'en-tête
+    const long = isSubtable(k) || isLongText(k, META?.[k]?.type||'Text', CURRENT[k]);
+    if(FOLDED.has(k)){ (long?foldedBody:foldedProps).push(k); }
+    else { (long?bodyKeys:propKeys).push(k); }
+  });
+
+  let html = IN_GRIST? '' : `<div class="demo-banner">Aperçu démo — connecte ce widget à une table Grist pour voir tes données réelles.</div>`;
+
+  // Bandeau de navigation (consultation d'un enregistrement lié)
+  if(NAV.length){
+    html += `<div class="navbar"><button class="navback" data-act="navback">← Retour</button>
+       <span class="navinfo">Enregistrement lié · ${escapeHtml(ACTIVE_TABLE||'')}${NAV.length>1?` (${NAV.length})`:''}</span></div>`;
+  }
+
+  // En-tête : bouton réglages (coin), titre + sous-titre sur la même ligne, puis tags
+  const gearSvg = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`;
+
+  const linkVal = linkValueFor();
+  const linkBtn = linkVal ? `<button class="gear linkbtn" data-act="copylink" title="Copier le lien vers cette fiche">${icon('link')} Lien</button>` : '';
+  let hdr = `<div class="header-actions">${linkBtn}<button class="gear ${configuring?'active':''}" data-act="gear">${gearSvg}${configuring?'Terminer':'Champs'}</button></div>`;
+  let titleLine = '';
+  if(titleKey){
+    const tv = CURRENT[titleKey]||'';
+    const stl = cellStyle(titleKey);
+    const tro = isReadonly(META?.[titleKey]);
+    const tAttr = tro ? `data-ro="1" title="Colonne calculée (formule) — non modifiable ici"` : '';
+    titleLine += `<h1 class="title ${tv?'':'empty'} ${tro?'readonly':''}" data-key="${titleKey}" ${tAttr} ${stl?`style="${stl}"`:''}>${escapeHtml(tv)}</h1>`;
+  }
+  if(subtitleKey){
+    const sv = plainValue(subtitleKey);
+    const sro = isReadonly(META?.[subtitleKey]);
+    const sAttr = sro ? `data-ro="1" title="Colonne calculée (formule) — non modifiable ici"` : '';
+    titleLine += `<div class="subtitle ${sv?'':'placeholder'} ${sro?'readonly':''}" data-key="${subtitleKey}" ${sAttr}>${
+      sv ? escapeHtml(sv) : escapeHtml(META?.[subtitleKey]?.label||subtitleKey)+' — vide'}</div>`;
+  }
+  if(titleLine) titleLine = `<div class="header-main">${titleLine}</div>`;
+  let tagsBlock = '';
+  if(tagsKey){
+    const gro = isReadonly(META?.[tagsKey]);
+    const gAttr = gro ? `data-ro="1" title="Colonne calculée (formule) — non modifiable ici"` : '';
+    tagsBlock = `<div class="tags-row"><div class="tags ${gro?'readonly':''}" data-key="${tagsKey}" ${gAttr}>${tagsInner(tagsKey)}</div></div>`;
+  }
+  const imgHtml = headerImgHtml();
+  const bodyHtml = titleLine + tagsBlock;
+  if(imgHtml) hdr += `<div class="header-lead">${imgHtml}<div class="header-body">${bodyHtml}</div></div>`;
+  else hdr += bodyHtml;
+  html += `<div class="fiche-header">${hdr}</div>`;
+
+  // Panneau de configuration (sous l'en-tête)
+  if(configuring){
+    html += `<div class="config">`;
+    html += `<div class="ctitle">Colonne servant de titre</div>
+      <select class="editor" data-role="title" style="margin-bottom:12px">
+        <option value="">— Automatique (1er champ texte) —</option>` +
+      keys.map(k=>`<option value="${escapeHtml(k)}" ${k===TITLE_KEY?'selected':''}>${escapeHtml(META?.[k]?.label||k)}</option>`).join('') +
+      `</select>`;
+    html += `<div class="ctitle">Sous-titre</div>
+      <select class="editor" data-role="subtitle" style="margin-bottom:12px">
+        <option value="">— Aucun —</option>` +
+      keys.map(k=>`<option value="${escapeHtml(k)}" ${k===SUBTITLE_KEY?'selected':''}>${escapeHtml(META?.[k]?.label||k)}</option>`).join('') +
+      `</select>`;
+    html += `<div class="ctitle">Tags (pastilles)</div>
+      <select class="editor" data-role="tags" style="margin-bottom:14px">
+        <option value="">— Aucun —</option>` +
+      keys.map(k=>`<option value="${escapeHtml(k)}" ${k===TAGS_KEY?'selected':''}>${escapeHtml(META?.[k]?.label||k)}</option>`).join('') +
+      `</select>`;
+    html += `<div class="ctitle">Image d'en-tête (logo / photo — colonne pièce jointe ou URL)</div>
+      <select class="editor" data-role="headimg" style="margin-bottom:14px">
+        <option value="">— Aucune —</option>` +
+      keys.map(k=>`<option value="${escapeHtml(k)}" ${k===HEADER_IMG?'selected':''}>${escapeHtml(META?.[k]?.label||k)}</option>`).join('') +
+      `</select>`;
+    html += `<div class="ctitle">Modèle de lien — colle un lien d'ancrage (Ctrl+Shift+A sur une ligne)</div>
+      <input class="editor" data-role="linktpl" value="${escapeHtml(LINK_TEMPLATE)}"
+        placeholder="https://…/p/19#a1.s28.r5" style="margin-bottom:6px;width:100%;box-sizing:border-box">
+      <div style="font-size:11.5px;color:var(--ink-faint);margin-bottom:14px">
+        Le widget remplace le numéro de ligne automatiquement — un seul collage par page, valable pour toutes les lignes. Aucune formule nécessaire.</div>`;
+    html += `<div class="ctitle">Glisser pour réordonner · cocher pour replier</div>`;
+    keys.forEach(k=>{
+      const m = META?.[k]||{};
+      html += `<div class="row" draggable="true" data-col="${escapeHtml(k)}">
+          <span class="grip" title="Glisser">⠿</span>
+          <input type="checkbox" data-fold="${k}" ${FOLDED.has(k)?'checked':''}>
+          <span class="nm">${escapeHtml(m.label||k)}</span>
+          <span class="tag">${escapeHtml(baseType(m.type||'Text'))}${k===titleKey?' · titre':''}</span></div>`;
+    });
+    html += `</div>`;
+
+    // Réglage des références multiples : labels vs tableau + colonnes
+    const rlKeys = keys.filter(k=> typeKind(META?.[k]?.type)==='reflist');
+    if(rlKeys.length){
+      html += `<div class="ctitle" style="margin-top:14px">Références multiples</div>`;
+      rlKeys.forEach(k=>{
+        const mode = RL_MODE[k]||'table';
+        html += `<div class="rl-cfg"><div class="rl-head">
+            <span class="nm">${escapeHtml(META?.[k]?.label||k)}</span>
+            <span class="seg">
+              <button data-rlmode="${escapeHtml(k)}" data-mode="chips" class="${mode==='chips'?'on':''}">Labels</button>
+              <button data-rlmode="${escapeHtml(k)}" data-mode="table" class="${mode==='table'?'on':''}">Tableau</button>
+            </span></div>`;
+        if(mode==='table'){
+          const tgt = refTarget(META?.[k]?.type);
+          const tm = targetMeta(tgt);
+          if(tm){
+            const ordered = Object.keys(tm).sort((a,b)=>(tm[a].order??0)-(tm[b].order??0));
+            const chosenList = (RL_COLS[k] && RL_COLS[k].length)
+              ? RL_COLS[k].filter(c=>ordered.includes(c))
+              : ordered.slice(0,6);
+            const chosen = new Set(chosenList);
+            // cochées d'abord (dans l'ordre choisi, réordonnables), puis les autres
+            const display = [...chosenList, ...ordered.filter(c=>!chosen.has(c))];
+            html += `<div class="rl-cols">` + display.map(c=>{
+              const on = chosen.has(c);
+              const pos = on ? chosenList.indexOf(c) : -1;
+              const canUp = on && pos>0, canDown = on && pos<chosenList.length-1;
+              return `<div class="rl-col${on?' on':''}">
+                <label><input type="checkbox" data-rlcol="${escapeHtml(k)}" data-col="${escapeHtml(c)}" ${on?'checked':''}> ${escapeHtml(tm[c].label||c)}</label>
+                <span class="rl-ord">
+                  <button class="rl-move" data-rlmove="${escapeHtml(k)}" data-col="${escapeHtml(c)}" data-dir="up" ${canUp?'':'disabled'} title="Monter">↑</button>
+                  <button class="rl-move" data-rlmove="${escapeHtml(k)}" data-col="${escapeHtml(c)}" data-dir="down" ${canDown?'':'disabled'} title="Descendre">↓</button>
+                </span>
+              </div>`;
+            }).join('') + `</div>`;
+          } else {
+            html += `<div class="rl-cols"><span style="color:var(--ink-faint);font-size:12px">Colonnes chargées à l'ouverture d'une fiche…</span></div>`;
+          }
+        }
+        html += `</div>`;
+      });
+    }
+    html += `<div class="ctitle">Réutiliser ce paramétrage</div>
+      <div class="cfg-io">
+        <button class="btn" data-act="cfg-copy">Copier la config</button>
+        <button class="btn" data-act="cfg-paste">Coller la config</button>
+      </div>
+      <div class="cfg-io-note">Copie titre, sous-titre, tags, ordre, champs repliés et modes de listes. À coller sur une autre page de la même base. (Le modèle de lien reste propre à chaque page.)</div>
+      <textarea class="editor cfg-io-box" data-cfgbox="1" placeholder="Colle ici la config puis « Appliquer »…" style="display:none;width:100%;box-sizing:border-box;min-height:70px;margin-top:8px"></textarea>
+      <button class="btn primary" data-act="cfg-apply" style="display:none;margin-top:6px">Appliquer</button>`;
+    html += `<div class="cfg-ver">Version ${WIDGET_BUILD}</div>`;
+  }
+
+  // Propriétés visibles
+  if(propKeys.length){
+    html += '<div class="props">';
+    propKeys.forEach(k=>{ html += propRow(k); });
+    html += '</div>';
+  }
+
+  // Corps visibles — le dernier prend la hauteur restante si rien ne suit
+  const foldedCount = foldedProps.length + foldedBody.length;
+  const cmtHtml = commentsHtml();
+  const nothingAfter = foldedCount===0 && !cmtHtml && !configuring;
+  bodyKeys.forEach((k,i)=>{
+    if(typeKind(META?.[k]?.type)==='reflist'){ html += subtableBlock(k); return; }
+    const last = (i===bodyKeys.length-1) && nothingAfter;
+    html += bodyBlock(k, last);
+  });
+
+  // Section dépliable « Autres champs »
+  if(foldedCount){
+    html += `<details class="folded" ${foldOpen?'open':''}><summary>
+        <svg class="chev" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+        Autres champs (${foldedCount})</summary><div class="folded-body">`;
+    if(foldedProps.length){
+      html += '<div class="props">';
+      foldedProps.forEach(k=>{ html += propRow(k); });
+      html += '</div>';
+    }
+    foldedBody.forEach(k=>{ html += (typeKind(META?.[k]?.type)==='reflist') ? subtableBlock(k) : bodyBlock(k); });
+    html += `</div></details>`;
+  }
+
+  // Section commentaires (lecture seule)
+  html += cmtHtml;
+
+  wrap.innerHTML = html;
+  wrap.appendChild(emptyEl);
+  bindClicks();
+  bindToolbar();
+  hydrateAttachments();
+}
+
+function bindToolbar(){
+  const gear = wrap.querySelector('[data-act="gear"]');
+  if(gear) gear.addEventListener('click', ()=>{ configuring=!configuring; render(); });
+  const nb = wrap.querySelector('[data-act="navback"]');
+  if(nb) nb.addEventListener('click', ()=> navBack());
+  const cl = wrap.querySelector('[data-act="copylink"]');
+  if(cl) cl.addEventListener('click', ()=>{ const u=linkValueFor(); if(u) copyToClipboard(u, cl); });
+  const cfgCopy = wrap.querySelector('[data-act="cfg-copy"]');
+  if(cfgCopy) cfgCopy.addEventListener('click', ()=> copyToClipboard(JSON.stringify(configPayload()), cfgCopy));
+  const cfgBox = wrap.querySelector('[data-cfgbox]');
+  const cfgApply = wrap.querySelector('[data-act="cfg-apply"]');
+  const cfgPaste = wrap.querySelector('[data-act="cfg-paste"]');
+  if(cfgPaste) cfgPaste.addEventListener('click', async ()=>{
+    if(cfgBox){ cfgBox.style.display='block'; if(cfgApply) cfgApply.style.display='inline-block';
+      try{ const t = await navigator.clipboard.readText(); if(t) cfgBox.value = t; }catch(_){}
+      cfgBox.focus(); }
+  });
+  if(cfgApply) cfgApply.addEventListener('click', ()=>{ if(cfgBox && cfgBox.value.trim()) applyConfigJson(cfgBox.value.trim()); });
+  wrap.querySelectorAll('[data-role]').forEach(sel=>{
+    sel.addEventListener('change', ()=>{
+      const v = sel.value || null;
+      if(sel.dataset.role==='title') TITLE_KEY = v;
+      else if(sel.dataset.role==='subtitle') SUBTITLE_KEY = v;
+      else if(sel.dataset.role==='tags') TAGS_KEY = v;
+      else if(sel.dataset.role==='headimg') HEADER_IMG = v;
+      else if(sel.dataset.role==='link') LINK_KEY = sel.value || 'auto';
+      else if(sel.dataset.role==='linktpl') LINK_TEMPLATE = (sel.value||'').trim();
+      saveOptions(); render();
+    });
+  });
+  wrap.querySelectorAll('[data-fold]').forEach(cb=>{
+    cb.addEventListener('change', ()=>{
+      const k = cb.dataset.fold;
+      if(cb.checked) FOLDED.add(k); else FOLDED.delete(k);
+      saveOptions();
+      render();
+    });
+  });
+
+  // Glisser-déposer pour réordonner les champs
+  let dragCol = null;
+  const rows = [...wrap.querySelectorAll('.config .row[data-col]')];
+  const clearMarks = ()=> rows.forEach(r=>r.classList.remove('drop-before','drop-after'));
+  rows.forEach(row=>{
+    row.addEventListener('dragstart', e=>{
+      dragCol = row.dataset.col; row.classList.add('dragging');
+      e.dataTransfer.effectAllowed='move';
+      try{ e.dataTransfer.setData('text/plain', dragCol); }catch(_){}
+    });
+    row.addEventListener('dragend', ()=>{ dragCol=null; clearMarks(); rows.forEach(r=>r.classList.remove('dragging')); });
+    row.addEventListener('dragover', e=>{
+      e.preventDefault();
+      if(!dragCol || row.dataset.col===dragCol) return;
+      const r = row.getBoundingClientRect();
+      const after = (e.clientY - r.top) > r.height/2;
+      clearMarks(); row.classList.add(after?'drop-after':'drop-before');
+    });
+    row.addEventListener('drop', e=>{
+      e.preventDefault();
+      const targetCol = row.dataset.col;
+      if(!dragCol || dragCol===targetCol) return;
+      const r = row.getBoundingClientRect();
+      const after = (e.clientY - r.top) > r.height/2;
+      let order = rows.map(x=>x.dataset.col).filter(c=>c!==dragCol);
+      let idx = order.indexOf(targetCol); if(after) idx += 1;
+      order.splice(idx, 0, dragCol);
+      ORDER = order; saveOptions(); render();
+    });
+  });
+
+  // Références multiples : mode labels/tableau
+  wrap.querySelectorAll('[data-rlmode]').forEach(b=>{
+    b.addEventListener('click', async ()=>{
+      const k = b.dataset.rlmode;
+      RL_MODE[k] = b.dataset.mode;
+      saveOptions();
+      if(RL_MODE[k]==='table') await preloadRefRows();
+      render();
+    });
+  });
+  // Références multiples : colonnes affichées
+  wrap.querySelectorAll('[data-rlcol]').forEach(cb=>{
+    cb.addEventListener('change', ()=>{
+      const k = cb.dataset.rlcol;
+      // état courant = cases cochées, dans l'ordre du DOM (cochées d'abord = ordre choisi)
+      RL_COLS[k] = [...wrap.querySelectorAll(`[data-rlcol="${CSS.escape(k)}"]`)]
+        .filter(x=>x.checked).map(x=>x.dataset.col);
+      saveOptions();
+      render();
+    });
+  });
+  // Références multiples : réordonner les colonnes (↑/↓)
+  wrap.querySelectorAll('[data-rlmove]').forEach(b=>{
+    b.addEventListener('click', ()=>{
+      if(b.disabled) return;
+      const k = b.dataset.rlmove, c = b.dataset.col, dir = b.dataset.dir;
+      const tgt = refTarget(META?.[k]?.type); const tm = targetMeta(tgt) || {};
+      const ordered = Object.keys(tm).sort((a,b)=>(tm[a].order??0)-(tm[b].order??0));
+      const list = (RL_COLS[k] && RL_COLS[k].length)
+        ? RL_COLS[k].filter(col=>ordered.includes(col))
+        : ordered.slice(0,6);
+      const i = list.indexOf(c); if(i<0) return;
+      const j = dir==='up' ? i-1 : i+1;
+      if(j<0 || j>=list.length) return;
+      [list[i], list[j]] = [list[j], list[i]];   // permutation
+      RL_COLS[k] = list;
+      saveOptions();
+      render();
+    });
+  });
+
+  const det = wrap.querySelector('details.folded');
+  if(det) det.addEventListener('toggle', ()=>{ foldOpen = det.open; });
+}
+
+// Représentation textuelle simple d'une valeur (pour le sous-titre)
+function plainValue(k){
+  const m=META?.[k]||{}; const t=m.type||'Text'; const kind=typeKind(t); const v=CURRENT[k];
+  if(v==null||v==='') return '';
+  if(kind==='date') return fmtDate(v,t);
+  if(kind==='bool') return v?'Oui':'Non';
+  if(kind==='choice') return String(v);
+  if(kind==='choicelist') return asList(v).join(', ');
+  if(kind==='ref'||kind==='reflist'){
+    const d = CURRENT['gristHelper_Display'+capitalize(k)] ?? CURRENT['gristHelper_Display'];
+    if(d!=null && d!=='') return Array.isArray(d)? asList(d).join(', ') : String(d);
+    return asList(v).map(x=>refLabelFor(k,x)??x).join(', ');
+  }
+  return String(v);
+}
+// Pastilles pour la zone tags (couleurs des choix si dispo)
+function tagsInner(k){
+  const m=META?.[k]||{}; const kind=typeKind(m.type); const v=CURRENT[k];
+  let labels;
+  if(kind==='choicelist') labels=asList(v);
+  else if(kind==='choice') labels=(v==null||v==='')?[]:[v];
+  else if(kind==='reflist'){
+    const d=CURRENT['gristHelper_Display'+capitalize(k)] ?? CURRENT['gristHelper_Display'];
+    labels = Array.isArray(d)? asList(d) : asList(v).map(x=>refLabelFor(k,x)??x);
+  } else { const pv=plainValue(k); labels = pv?[pv]:[]; }
+  if(!labels.length) return '<span class="placeholder">Vide</span>';
+  return labels.map(l=>chipHtml(String(l), m.wo||{})).join('');
+}
+
+function propRow(k){
+  const m = META?.[k] || {};
+  const type = m.type || 'Text';
+  const kind = typeKind(type);
+  const val = CURRENT[k];
+  const ro = isReadonly(m);
+  let inner, ph=false;
+
+  const refEnc = asReference(val);
+  const refListEnc = !refEnc ? asReferenceList(val) : null;
+  if(refEnc){
+    // Référence calculée (formule / type Any) : ['R', table, id] → pastille ouvrable
+    const dispHelper = CURRENT['gristHelper_Display'+capitalize(k)] ?? CURRENT['gristHelper_Display'];
+    const lbl = (dispHelper!=null && dispHelper!=='') ? dispHelper : (refLabelFor(k, refEnc.id) ?? ('#'+refEnc.id));
+    inner = `<span class="chips">${refChip(refEnc.target, refEnc.id, lbl)}</span>`;
+  } else if(refListEnc){
+    // Liste de références calculée : ['r', table, [ids]] → pastilles ouvrables (comme une RefList de données)
+    const ids = refListEnc.ids;
+    const dispHelper = CURRENT['gristHelper_Display'+capitalize(k)] ?? CURRENT['gristHelper_Display'];
+    const labels = Array.isArray(dispHelper) ? asList(dispHelper) : ids.map(id=> refLabelFor(k, id) ?? id);
+    inner = ids.length
+      ? `<span class="chips">${ids.map((id,i)=>refChip(refListEnc.target, id, labels[i] ?? id)).join('')}</span>`
+      : (ph=true,'Vide');
+  } else if(kind==='bool'){
+    inner = `<span class="bool ${val?'on':''}"><span class="box">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5"><path d="M5 13l4 4L19 7"/></svg>
+      </span><span>${val?'Oui':'Non'}</span></span>`;
+  } else if(kind==='choice'){
+    inner = (val==null||val==='')? (ph=true,'Vide') : `<span class="chips">${chipHtml(val,m.wo||{})}</span>`;
+  } else if(kind==='choicelist'){
+    const list=asList(val);
+    inner = list.length? `<span class="chips">${list.map(c=>chipHtml(c,m.wo||{})).join('')}</span>` : (ph=true,'Vide');
+  } else if(kind==='date'){
+    inner = (val==null||val==='')? (ph=true,'Vide') : escapeHtml(fmtDate(val,type));
+  } else if(kind==='ref'){
+    const target = refTarget(type);
+    let id = (typeof val==='number') ? val : null;
+    if(id==null && typeof val==='string' && REFCACHE[target]){
+      const f = REFCACHE[target].find(o=>o.label===val); if(f) id=f.id;
+    }
+    const dispHelper = CURRENT['gristHelper_Display'+capitalize(k)] ?? CURRENT['gristHelper_Display'];
+    const disp = (dispHelper!=null && dispHelper!=='') ? dispHelper
+               : (val ? (refLabelFor(k, val) ?? val) : '');
+    inner = (disp==null||disp===''||val===0||val==null)
+      ? (ph=true,'Vide')
+      : `<span class="chips">${refChip(target, id, disp)}</span>`;
+  } else if(kind==='reflist'){
+    const target = refTarget(type);
+    const ids = asList(val).filter(x=>x!=='' && x!=null);
+    const dispHelper = CURRENT['gristHelper_Display'+capitalize(k)] ?? CURRENT['gristHelper_Display'];
+    let labels;
+    if(Array.isArray(dispHelper)) labels = asList(dispHelper);
+    else labels = ids.map(id=> refLabelFor(k, id) ?? id);
+    inner = ids.length
+      ? `<span class="chips">${ids.map((id,i)=>refChip(target, (typeof id==='number'?id:null), labels[i] ?? id)).join('')}</span>`
+      : (ph=true,'Vide');
+  } else if(kind==='attach'){
+    const ids = asList(val).filter(x=>x!=='' && x!=null);
+    inner = ids.length
+      ? `<span class="attachs" data-pending="1" data-ids="${escapeHtml(ids.join(','))}">${ids.length} fichier${ids.length>1?'s':''}…</span>`
+      : (ph=true,'Vide');
+  } else if(kind==='num'){
+    inner = (val==null||val==='')? (ph=true,'Vide') : escapeHtml(String(val));
+  } else if((m.wo||{}).widget==='HyperLink'){
+    inner = (val==null||val==='')? (ph=true,'Vide') : hyperlinkHtml(val);
+  } else {
+    inner = (val==null||val==='')? (ph=true,'Vide') : escapeHtml(String(val));
+  }
+
+  const label = m.label || k;
+  const cls = `prop-val ${ph?'placeholder':''} ${ro?'readonly':''}`;
+  const stl = cellStyle(k);
+  const roAttr = ro ? `data-ro="1" title="Colonne calculée (formule) — non modifiable ici"` : '';
+  const isLink = (m.wo||{}).widget==='HyperLink';
+  const isRef = (kind==='ref'||kind==='reflist');
+  const acts = (ph || kind==='attach' || refEnc || refListEnc) ? '' : cellActions(k, { copy:true, open:isLink, edit:(!ro && (isLink||isRef)) });
+  return `<div class="prop">
+      <div class="prop-label">${icon(iconKind(type,false))}<span class="txt">${escapeHtml(label)}</span></div>
+      <div class="${cls}" data-key="${k}" ${roAttr} ${stl?`style="${stl}"`:''}>${inner}${acts}</div>
+    </div>`;
+}
+function capitalize(s){return s.charAt(0).toUpperCase()+s.slice(1);}
+
+/* ============================================================
+   Édition au clic
+   ============================================================ */
+function bindClicks(){
+  // Liens hypertexte : naviguer sans déclencher l'édition de la cellule
+  wrap.querySelectorAll('.prop-val .lk').forEach(a=>{
+    a.addEventListener('click', e=> e.stopPropagation());
+  });
+  // Ouvrir un enregistrement lié (clic sur une pastille de référence)
+  wrap.querySelectorAll('.ref-open').forEach(c=>{
+    c.addEventListener('click', e=>{
+      e.stopPropagation();
+      openRecord(c.dataset.openRef, c.dataset.openRow);
+    });
+  });
+  // Bouton « modifier » (liens et références : le clic sur la valeur est déjà pris)
+  wrap.querySelectorAll('.cell-act[data-edit-key]').forEach(b=>{
+    b.addEventListener('click', e=>{
+      e.stopPropagation();
+      const cell = wrap.querySelector(`[data-key="${CSS.escape(b.dataset.editKey)}"]`);
+      if(!cell || cell.dataset.ro) return;
+      if(editingKey){ render(); }
+      const fresh = wrap.querySelector(`[data-key="${CSS.escape(b.dataset.editKey)}"]`);
+      if(fresh) startEdit(fresh);
+    });
+  });
+  // Bouton « copier »
+  wrap.querySelectorAll('.cell-act[data-copy-key]').forEach(b=>{
+    b.addEventListener('click', e=>{
+      e.stopPropagation();
+      copyToClipboard(copyValue(b.dataset.copyKey), b);
+    });
+  });
+  // Bouton « ouvrir le lien »
+  wrap.querySelectorAll('.cell-act[data-open-key]').forEach(b=>{
+    b.addEventListener('click', e=>{
+      e.stopPropagation();
+      const href = linkHref(CURRENT[b.dataset.openKey]);
+      if(href) window.open(href, '_blank', 'noopener');
+    });
+  });
+  wrap.querySelectorAll('[data-key]').forEach(el=>{
+    el.addEventListener('click', ()=>{
+      const key = el.dataset.key;
+      if(el.dataset.ro){ toast('Champ calculé (formule), non modifiable'); return; }
+      if(editingKey){ render(); }   // ferme proprement tout éditeur ouvert (et libère editingKey)
+      const fresh = wrap.querySelector(`[data-key="${CSS.escape(key)}"]`) || el;
+      startEdit(fresh);
+    });
+  });
+}
+
+// Copie dans le presse-papier, avec retour visuel (coche) sur le bouton
+async function copyToClipboard(text, btn){
+  const ok = ()=>{
+    if(!btn) return;
+    const prev = btn.innerHTML;
+    btn.innerHTML = icon('check'); btn.classList.add('done');
+    toast('Copié');
+    setTimeout(()=>{ btn.innerHTML = prev; btn.classList.remove('done'); }, 1100);
+  };
+  try{
+    if(navigator.clipboard && navigator.clipboard.writeText){ await navigator.clipboard.writeText(text); ok(); return; }
+    throw new Error('no clipboard api');
+  }catch(_){
+    try{ // repli pour iframe/navigateur sans Clipboard API
+      const ta=document.createElement('textarea'); ta.value=text;
+      ta.style.position='fixed'; ta.style.opacity='0'; document.body.appendChild(ta);
+      ta.select(); document.execCommand('copy'); document.body.removeChild(ta); ok();
+    }catch(e){ toast('Copie impossible'); }
+  }
+}
+
+function startEdit(el){
+  const key = el.dataset.key;
+  const m = META?.[key] || {};
+  const type = m.type || 'Text';
+  const kind = typeKind(type);
+  const val = CURRENT[key];
+  editingKey = key;
+
+  // Titre
+  if(el.classList.contains('title')){
+    return inlineInput(el, val||'', 'text', v=>commit(key, v));
+  }
+  // Bloc markdown / texte long
+  if(el.dataset.md){
+    return editMarkdown(el, key, val||'');
+  }
+  if(kind==='bool'){
+    commit(key, !val); editingKey=null; return;
+  }
+  if(kind==='choice'){
+    return editChoice(el, key, m, val);
+  }
+  if(kind==='choicelist'){
+    return editChoiceList(el, key, m, asList(val));
+  }
+  if(kind==='date'){
+    return editDate(el, key, type, val);
+  }
+  if(kind==='num'){
+    return inlineInput(el, val??'', 'number', v=>commit(key, v===''?null:Number(v)));
+  }
+  if(kind==='attach'){
+    editingKey=null;   // pièces jointes : lecture/téléchargement seulement (clic sur un fichier pour l'ouvrir)
+    return;
+  }
+  if(kind==='ref'){
+    return editRef(el, key, m, val);
+  }
+  if(kind==='reflist'){
+    return editRefList(el, key, m, asList(val));   // ids OU libellés : résolus dans le picker
+  }
+  // texte court
+  inlineInput(el, val||'', 'text', v=>commit(key, v));
+}
+
+function inlineInput(el, value, htmlType, onSave){
+  const input = document.createElement('input');
+  input.type = htmlType; input.className='editor'; input.value = value;
+  el.replaceWith(input); input.focus(); input.select?.();
+  const done = save=>{
+    if(save) onSave(input.value);
+    editingKey=null; if(!save) render(); 
+  };
+  input.addEventListener('keydown', e=>{
+    if(e.key==='Enter'){e.preventDefault();done(true);}
+    if(e.key==='Escape'){e.preventDefault();done(false);}
+  });
+  input.addEventListener('blur', ()=>done(true));
+}
+
+let mdEditor = null;   // instance Toast UI courante
+
+function editMarkdown(el, key, value){
+  const dark = window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches;
+  const blockEl = el.closest('.body-block');
+  const grow = true;                                // éditeur toujours en pleine hauteur
+  if(blockEl) blockEl.classList.add('editing-grow');
+  const box = document.createElement('div'); box.className='ml-edit grow-edit';
+
+  // Repli si le CDN de l'éditeur n'est pas chargé : ancien textarea + aperçu live
+  if(!(window.toastui && toastui.Editor)){
+    return editMarkdownFallback(el, key, value);
+  }
+
+  const host = document.createElement('div');
+  if(grow){ host.style.flex='1 1 auto'; host.style.minHeight='0'; }
+  const actions = document.createElement('div'); actions.className='editor-actions';
+  actions.innerHTML = `<span class="save-state" style="font-size:11.5px;color:var(--ink-faint)">
+      Titres : bouton <b>Tt</b> de la barre · ou onglet <b>Markdown</b> (en bas) pour taper <b>#</b>, <b>##</b>…</span>
+      <span class="spacer"></span>
+      <button class="btn" data-act="cancel">Annuler</button>
+      <button class="btn primary" data-act="save">Fermer</button>`;
+  box.append(host, actions);
+  el.replaceWith(box);
+
+  mdEditor = new toastui.Editor({
+    el: host,
+    height: grow ? '100%' : '360px',
+    initialEditType: 'wysiwyg',     // démarre en WYSIWYG
+    previewStyle: 'tab',
+    initialValue: value || '',
+    usageStatistics: false,
+    theme: dark ? 'dark' : 'default',
+    language: 'fr',
+    toolbarItems: [
+      ['heading','bold','italic','strike'],
+      ['hr','quote'],
+      ['ul','ol','task'],
+      ['table','link'],
+      ['code','codeblock'],
+    ],
+  });
+  mdEditor.focus();
+
+  const original = value || '';
+  let lastSaved = original, saveTimer = null;
+  const stateEl = actions.querySelector('.save-state');
+  const flashSaved = ()=>{ if(stateEl){ stateEl.dataset.def = stateEl.dataset.def||stateEl.innerHTML;
+      stateEl.innerHTML = '<span style="color:#3a7a3a">✓ Enregistré automatiquement</span>';
+      clearTimeout(stateEl._t); stateEl._t = setTimeout(()=>{ stateEl.innerHTML = stateEl.dataset.def; }, 1800); } };
+
+  // Auto-enregistrement (anti-perte) : 1,2 s après la dernière frappe, sans fermer l'éditeur
+  const scheduleSave = ()=>{
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(()=>{
+      if(!mdEditor) return;
+      const md = normalizeEmphasis(mdEditor.getMarkdown());
+      if(md===lastSaved) return;
+      lastSaved = md;
+      commit(key, md, {silent:true});   // silent : ne re-rend pas, garde l'éditeur ouvert
+      flashSaved();
+    }, 1200);
+  };
+  mdEditor.on('change', scheduleSave);
+
+  const finish = (save)=>{
+    clearTimeout(saveTimer);
+    const md = mdEditor ? normalizeEmphasis(mdEditor.getMarkdown()) : null;
+    if(mdEditor){ try{ mdEditor.destroy(); }catch(_){} mdEditor=null; }
+    editingKey=null;
+    if(save){
+      if(md!=null && md!==lastSaved) commit(key, md); else render();
+    } else {
+      // Annuler : si des sauvegardes automatiques ont eu lieu, on restaure la valeur d'origine
+      if(lastSaved!==original) commit(key, original); else render();
+    }
+  };
+  actions.querySelector('[data-act="save"]').onclick = ()=>finish(true);
+  actions.querySelector('[data-act="cancel"]').onclick = ()=>finish(false);
+  // Ctrl/⌘+Entrée pour fermer, Échap pour annuler (capture pour passer avant l'éditeur)
+  box.addEventListener('keydown', e=>{
+    if(e.key==='Enter' && (e.metaKey||e.ctrlKey)){ e.preventDefault(); finish(true); }
+    else if(e.key==='Escape'){ e.preventDefault(); finish(false); }
+  }, true);
+}
+
+/* Repli : éditeur markdown brut + aperçu en direct (si Toast UI indisponible) */
+function editMarkdownFallback(el, key, value){
+  const box = document.createElement('div'); box.className='ml-edit';
+  const ta = document.createElement('textarea'); ta.className='editor'; ta.value=value;
+  const prev = document.createElement('div'); prev.className='ml-preview';
+  prev.innerHTML = `<div class="lbl">Aperçu</div><div class="md">${renderMd(value)||'<span style="color:var(--ink-faint)">…</span>'}</div>`;
+  const hint = document.createElement('div'); hint.className='edit-hint';
+  hint.innerHTML = `<span>Markdown : **gras**, # titre, - liste, [lien](url)</span>
+                    <span><kbd>⌘/Ctrl + Entrée</kbd> enregistrer · <kbd>Échap</kbd> annuler</span>`;
+  box.append(ta, prev, hint);
+  el.replaceWith(box); ta.focus();
+  const refresh = ()=>{ $('.md',prev).innerHTML = renderMd(ta.value)||'<span style="color:var(--ink-faint)">…</span>'; };
+  ta.addEventListener('input', refresh);
+  const done = save=>{ if(save) commit(key, normalizeEmphasis(ta.value)); editingKey=null; if(!save) render(); };
+  ta.addEventListener('keydown', e=>{
+    if(e.key==='Enter' && (e.metaKey||e.ctrlKey)){e.preventDefault();done(true);}
+    if(e.key==='Escape'){e.preventDefault();done(false);}
+  });
+  ta.addEventListener('blur', ()=>setTimeout(()=>{ if(editingKey===key) done(true); },120));
+}
+
+function editChoice(el, key, m, val){
+  const wo = m.wo||{}; const choices = wo.choices||[];
+  const sel = document.createElement('select'); sel.className='editor';
+  sel.innerHTML = `<option value="">— vide —</option>` +
+    choices.map(c=>`<option ${c===val?'selected':''}>${escapeHtml(c)}</option>`).join('');
+  el.replaceWith(sel); sel.focus();
+  const done = save=>{ if(save) commit(key, sel.value||null); editingKey=null; if(!save) render(); };
+  sel.addEventListener('change', ()=>done(true));
+  sel.addEventListener('blur', ()=>done(true));
+  sel.addEventListener('keydown', e=>{ if(e.key==='Escape') done(false); });
+}
+
+function editChoiceList(el, key, m, current){
+  const wo = m.wo||{}; const choices = wo.choices||[];
+  const box = document.createElement('div'); box.className='ml-edit';
+  const checks = document.createElement('div'); checks.className='checks';
+  checks.innerHTML = choices.map(c=>`<label><input type="checkbox" value="${escapeHtml(c)}"
+      ${current.includes(c)?'checked':''}>${escapeHtml(c)}</label>`).join('') ||
+      '<span style="color:var(--ink-faint)">Aucun choix défini sur la colonne</span>';
+  const hint = document.createElement('div'); hint.className='edit-hint';
+  hint.innerHTML = `<span>Enregistré au fur et à mesure</span>
+    <span class="right"><kbd>Entrée</kbd>/<kbd>Échap</kbd> fermer <button class="btn primary" data-act="ok" title="Valider (Entrée)">✓</button></span>`;
+  const propEl = el.closest('.prop');
+  box.append(checks, hint); el.replaceWith(box);
+  if(propEl) propEl.classList.add('editing-wide');
+  // Comme la RefList : on enregistre à chaque coche sans refermer (commit silencieux).
+  checks.querySelectorAll('input').forEach(i=>i.addEventListener('change', ()=>{
+    const picked = [...checks.querySelectorAll('input:checked')].map(x=>x.value);
+    commit(key, ['L', ...picked], {silent:true});
+  }));
+  const close = ()=>{ editingKey=null; render(); };
+  hint.querySelector('[data-act="ok"]').addEventListener('click', close);
+  box.tabIndex=0; box.focus();
+  box.addEventListener('keydown', e=>{
+    if(e.key==='Escape' || e.key==='Enter'){ e.preventDefault(); close(); }
+  });
+}
+
+// Sélecteur de référence en type-ahead : ne dessine jamais toute la table cible.
+// On filtre en mémoire et on n'affiche qu'un nombre limité de résultats.
+const REF_RENDER_LIMIT = 50;
+
+async function refPicker(el, key, m, multi, current){
+  const target = refTarget(m.type);
+  const visCol = m.visibleCol ? COLREF[m.visibleCol] : null;
+
+  const box = document.createElement('div'); box.className='ml-edit';
+  const search = document.createElement('input');
+  search.className='editor'; search.placeholder='Rechercher…';
+  const list = document.createElement('div'); list.className='checks ref-checks';
+  list.innerHTML = '<span style="color:var(--ink-faint)">Chargement…</span>';
+  const hint = document.createElement('div'); hint.className='edit-hint';
+  hint.innerHTML = `<span class="count"></span><span class="right"><kbd>${multi?'Entrée':'Échap'}</kbd>${multi?'/<kbd>Échap</kbd> fermer':' annuler'}${multi?' <button class="btn primary" data-act="ok" title="Valider (Entrée)">✓</button>':''}</span>`;
+  const propEl = el.closest('.prop');
+  box.append(search, list, hint); el.replaceWith(box); search.focus();
+  if(propEl) propEl.classList.add('editing-wide');
+  const okBtn = box.querySelector('[data-act="ok"]');
+  if(okBtn) okBtn.addEventListener('click', ()=>{ editingKey=null; render(); });
+
+  const opts = await refOptions(target, visCol);
+  if(editingKey!==key) return;
+  // libellés en minuscules précalculés une seule fois (pour filtrer vite sur 39k lignes)
+  const idx = opts.map(o=>({ id:o.id, label:o.label, lc:String(o.label).toLowerCase() }));
+  const byId = new Map(idx.map(o=>[o.id,o.label]));
+  const byLabel = new Map(idx.map(o=>[String(o.label), o.id]));
+
+  // La valeur courante peut être des IDs (nombres) OU des libellés (chaînes) selon Grist.
+  // On résout chaque jeton vers un ID de ligne.
+  const resolve = tok=>{
+    const n = Number(tok);
+    if(Number.isInteger(n) && n>0 && byId.has(n)) return n;
+    if(byLabel.has(String(tok))) return byLabel.get(String(tok));
+    return null;
+  };
+  const cur = multi
+    ? new Set((Array.isArray(current)?current:(current?[current]:[])).map(resolve).filter(x=>x))
+    : (resolve(current) || 0);
+
+  const draw = ()=>{
+    const f = search.value.trim().toLowerCase();
+    let matches;
+    if(!f){ matches = idx; }
+    else {
+      // Classement par pertinence : exact (0) → commence par (1) → début de mot (2) → contient (3),
+      // puis le plus court d'abord. Ainsi un match exact (« Oise ») remonte devant les « X-sur-Oise ».
+      matches = idx.filter(o=>o.lc.includes(f)).map(o=>{
+        const i = o.lc.indexOf(f);
+        let s;
+        if(o.lc === f) s = 0;
+        else if(i === 0) s = 1;
+        else if(/[^0-9a-zà-öø-ÿ]/.test(o.lc[i-1]||'')) s = 2;   // séparateur juste avant → début de mot
+        else s = 3;
+        return { o, s, len:o.label.length };
+      });
+      matches.sort((a,b)=> a.s - b.s || a.len - b.len);
+      matches = matches.map(m=>m.o);
+    }
+    const total = matches.length;
+    // garder les éléments déjà sélectionnés visibles en tête (cas multi)
+    let head = [];
+    if(multi) head = [...cur].filter(id=>!matches.some(o=>o.id===id))
+                             .map(id=>({id, label: byId.get(id) ?? id}));
+    const shown = head.concat(matches.slice(0, REF_RENDER_LIMIT));
+    let html = multi ? '' :
+      `<label><input type="radio" name="rp" value="0" ${!cur?'checked':''}><span>— vide —</span></label>`;
+    html += shown.map(o=>{
+      const inp = multi ? 'type="checkbox"' : 'type="radio" name="rp"';
+      const on  = multi ? (cur.has(o.id)?'checked':'') : (cur===o.id?'checked':'');
+      return `<label><input ${inp} value="${o.id}" ${on}><span>${escapeHtml(String(o.label))}</span></label>`;
+    }).join('');
+    if(!shown.length) html = '<span style="color:var(--ink-faint)">Aucun résultat</span>';
+    list.innerHTML = html;
+    const hidden = total - Math.min(total, REF_RENDER_LIMIT);
+    box.querySelector('.count').textContent =
+      `${total.toLocaleString('fr-FR')} ligne${total>1?'s':''}` +
+      (hidden>0 ? ` · ${hidden.toLocaleString('fr-FR')} masquées, affinez la recherche` : '');
+    list.querySelectorAll('input').forEach(i=>i.addEventListener('change',()=>{
+      const id = Number(i.value);
+      if(multi){
+        if(i.checked) cur.add(id); else cur.delete(id);
+        commit(key, ['L', ...[...cur].filter(n=>Number.isInteger(n)&&n>0)], {silent:true});
+      } else {
+        editingKey=null; commit(key, id||0);  // simple : écrit et ferme
+      }
+    }));
+  };
+  draw();
+  search.addEventListener('input', draw);
+  box.addEventListener('keydown', e=>{
+    if(e.key==='Escape'){ e.preventDefault(); editingKey=null; render(); }
+    else if(e.key==='Enter' && multi){ e.preventDefault(); editingKey=null; render(); }
+  });
+}
+
+function editRef(el, key, m, val){ return refPicker(el, key, m, false, (typeof val==='number'?val:0)); }
+function editRefList(el, key, m, current){ return refPicker(el, key, m, true, current); }
+
+
+function editDate(el, key, type, val){
+  const input = document.createElement('input');
+  input.type = baseType(type)==='DateTime'?'datetime-local':'date';
+  input.className='editor';
+  if(val!=null && val!==''){
+    const ms = typeof val==='number'? val*1000 : Date.parse(val);
+    if(!isNaN(ms)){
+      const d=new Date(ms); const pad=n=>String(n).padStart(2,'0');
+      input.value = input.type==='date'
+        ? `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`
+        : `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    }
+  }
+  el.replaceWith(input); input.focus();
+  let closed = false;
+  const done = save=>{
+    if(closed) return; closed = true;
+    if(save){
+      const v = input.value? Math.floor(new Date(input.value).getTime()/1000) : null;
+      commit(key, v);
+    }
+    editingKey=null; if(!save) render();
+  };
+  // Pas de validation sur « change » : sur un input date natif il se déclenche pendant la
+  // saisie de l'année et fermerait l'éditeur trop tôt. On valide sur Entrée ou à la sortie du champ.
+  input.addEventListener('keydown', e=>{
+    if(e.key==='Enter'){ e.preventDefault(); done(true); }
+    else if(e.key==='Escape'){ e.preventDefault(); done(false); }
+  });
+  input.addEventListener('blur', ()=> done(true));
+}
+
+/* ============================================================
+   Écriture dans Grist
+   ============================================================ */
+async function commit(colId, value, opts){
+  opts = opts || {};
+  const prev = CURRENT[colId];
+  CURRENT[colId] = value;           // optimiste
+  // En démo, le helper d'affichage des références ne se met pas à jour tout seul :
+  // on le supprime pour que propRow recalcule le libellé depuis le cache.
+  if(!IN_GRIST){ delete CURRENT['gristHelper_Display'+capitalize(colId)]; }
+  if(!opts.silent) render();        // silent : on garde l'éditeur ouvert (ex. RefList multi)
+  if(!IN_GRIST){ toast('Enregistré (démo)'); return; }
+  try{
+    if(NAV.length===0){
+      await grist.selectedTable.update({ id: CURRENT.id, fields: { [colId]: value } });
+    }else{
+      await grist.docApi.applyUserActions([['UpdateRecord', ACTIVE_TABLE, CURRENT.id, { [colId]: value }]]);
+    }
+    toast('Enregistré');
+  }catch(err){
+    console.error(err);
+    CURRENT[colId] = prev; render();
+    toast('Échec de l’enregistrement');
+  }
+}
+
+/* ============================================================
+   Connexion à Grist + métadonnées
+   ============================================================ */
+let METATABLES = null;   // cache {tables, cols} des métatables
+let META_CACHE = {};     // tableId -> {META, REFMAP, TABLE_REF}
+let ACTIVE_TABLE = null;  // table dont META est actuellement chargé
+
+async function fetchMetatables(){
+  if(METATABLES) return METATABLES;
+  const [tables, cols] = await Promise.all([
+    grist.docApi.fetchTable('_grist_Tables'),
+    grist.docApi.fetchTable('_grist_Tables_column'),
+  ]);
+  COLREF = {};
+  for(let i=0;i<cols.id.length;i++) COLREF[cols.id[i]] = cols.colId[i];  // toutes tables
+  METATABLES = {tables, cols};
+  return METATABLES;
+}
+function buildMetaFor(tableId){
+  if(META_CACHE[tableId]) return META_CACHE[tableId];
+  const {tables, cols} = METATABLES;
+  let tref=null;
+  for(let i=0;i<tables.id.length;i++){ if(tables.tableId[i]===tableId){ tref=tables.id[i]; break; } }
+  const meta={}, refmap={};
+  for(let i=0;i<cols.id.length;i++){
+    if(cols.parentId[i]!==tref) continue;
+    refmap[cols.id[i]] = cols.colId[i];
+    const colId = cols.colId[i];
+    if(colId.startsWith('gristHelper_')||colId==='manualSort') continue;
+    meta[colId] = {
+      label: cols.label[i] || colId,
+      type: cols.type[i] || 'Text',
+      isFormula: !!cols.isFormula[i],
+      formula: cols.formula ? (cols.formula[i]||'') : '',
+      order: cols.parentPos ? cols.parentPos[i] : i,
+      wo: parseWO(cols.widgetOptions[i]),
+      rules: cols.rules ? cols.rules[i] : null,
+      visibleCol: cols.visibleCol ? cols.visibleCol[i] : null,
+      displayCol: cols.displayCol ? cols.displayCol[i] : null,   // colonne d'affichage (libellé résolu)
+    };
+  }
+  META_CACHE[tableId] = {META:meta, REFMAP:refmap, TABLE_REF:tref};
+  return META_CACHE[tableId];
+}
+async function loadMetaFor(tableId){
+  try{
+    await fetchMetatables();
+    const m = buildMetaFor(tableId);
+    META = m.META; REFMAP = m.REFMAP; TABLE_REF = m.TABLE_REF; ACTIVE_TABLE = tableId;
+  }catch(err){ console.warn('Métadonnées indisponibles', err); META = META || {}; }
+}
+async function loadMeta(){
+  TABLE_ID = await grist.selectedTable.getTableId();
+  await loadMetaFor(TABLE_ID);
+}
+
+/* ---- Navigation vers un enregistrement lié (mini-navigateur) ---- */
+async function openRecord(tableId, rowId){
+  if(!tableId || !rowId) return;
+  if(!IN_GRIST){ toast('Navigation disponible une fois connecté à Grist'); return; }
+  if(mdEditor){ try{ mdEditor.destroy(); }catch(_){} mdEditor=null; }
+  editingKey=null;
+  NAV.push({tableId, rowId: +rowId});
+  await showNav();
+}
+async function showNav(){
+  const top = NAV[NAV.length-1];
+  await loadMetaFor(top.tableId);
+  try{
+    const t = await grist.docApi.fetchTable(top.tableId);
+    const idx = (t.id||[]).indexOf(top.rowId);
+    if(idx<0){ toast('Enregistrement lié introuvable'); NAV.pop(); return navBack(); }
+    const rec = { id: top.rowId };
+    for(const c in t){ if(c==='id') continue; rec[c] = t[c][idx]; }
+    CURRENT = rec;
+    render();
+    scrollToTop();
+    await Promise.all([loadCommentsForCurrent(), preloadRefRows()]);
+    render();
+  }catch(e){ console.warn('Ouverture impossible', e); toast('Ouverture impossible'); NAV.pop(); }
+}
+function scrollToTop(){
+  try{ window.scrollTo(0,0); }catch(_){}
+  try{ if(document.scrollingElement) document.scrollingElement.scrollTop=0; }catch(_){}
+  if(document.documentElement) document.documentElement.scrollTop=0;
+  if(document.body) document.body.scrollTop=0;
+  if(typeof wrap!=='undefined' && wrap) wrap.scrollTop=0;
+}
+async function navBack(){
+  if(NAV.length) NAV.pop();
+  if(mdEditor){ try{ mdEditor.destroy(); }catch(_){} mdEditor=null; }
+  editingKey=null;
+  if(NAV.length===0){
+    await loadMetaFor(TABLE_ID);
+    CURRENT = BASE_RECORD;
+    render();
+    scrollToTop();
+    await Promise.all([loadCommentsForCurrent(), preloadRefRows()]);
+    render();
+  } else {
+    await showNav();
+  }
+}
+
+/* ---- Préchargement des tables liées (sous-tableaux RefList) ---- */
+async function preloadRefRows(){
+  if(!IN_GRIST || !CURRENT || !META) return;
+  try{
+    await fetchMetatables();
+    const targets = new Set();
+    for(const k in META){
+      if(typeKind(META[k].type)!=='reflist') continue;
+      if((RL_MODE[k]||'table')!=='table') continue;     // mode labels : pas de préchargement
+      const ids = asList(CURRENT[k]).filter(x=>x!=null && x!=='');
+      if(!ids.length) continue;
+      const t = refTarget(META[k].type); if(t) targets.add(t);
+    }
+    for(const t of targets){
+      buildMetaFor(t);                                   // méta de la table liée (cache)
+      REFROWS[t] = await grist.docApi.fetchTable(t);     // lignes rafraîchies (évite un cache périmé)
+    }
+  }catch(e){ console.warn('Préchargement des sous-tableaux impossible', e); }
+}
+
+/* ---- Commentaires (lecture seule, depuis la métatable _grist_Cells) ---- */
+async function loadCommentsForCurrent(){
+  COMMENTS = [];
+  if(!IN_GRIST || !CURRENT) return;
+  try{
+    if(!ALL_CELLS) ALL_CELLS = await grist.docApi.fetchTable('_grist_Cells');
+    const c = ALL_CELLS, n = (c.id||[]).length;
+    for(let i=0;i<n;i++){
+      if(c.tableRef[i]===TABLE_REF && c.rowId[i]===CURRENT.id){
+        COMMENTS.push({
+          id: c.id[i],
+          colRef: c.colRef ? c.colRef[i] : 0,
+          content: c.content ? c.content[i] : null,
+          userRef: c.userRef ? c.userRef[i] : null,
+          type: c.type ? c.type[i] : null,
+        });
+      }
+    }
+  }catch(e){ console.warn('Commentaires indisponibles', e); }
+}
+
+function commentsHtml(){
+  if(!COMMENTS.length) return '';
+  const fmtTs = ts=>{
+    if(ts==null) return '';
+    const ms = ts>1e11 ? ts : ts*1000;
+    const d = new Date(ms); if(isNaN(d)) return '';
+    return d.toLocaleString('fr-FR',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'});
+  };
+  let items = COMMENTS.map(cm=>{
+    let o=null; try{ o = cm.content!=null ? JSON.parse(cm.content) : null; }catch(_){}
+    const text   = o && o.text!=null ? o.text : (cm.content!=null ? String(cm.content) : '');
+    const author = o && (o.userName||o.author) ? (o.userName||o.author) : (cm.userRef||'');
+    const date   = fmtTs(o ? (o.timeCreated ?? o.timeUpdated ?? o.time) : null);
+    const colLab = cm.colRef && COLREF[cm.colRef] ? (META?.[COLREF[cm.colRef]]?.label || COLREF[cm.colRef]) : '';
+    const resolved = o && o.resolved;
+    return `<div class="cmt ${resolved?'resolved':''}">
+        <div class="cmt-head">
+          <span class="cmt-author">${escapeHtml(author||'—')}</span>
+          ${colLab?`<span class="cmt-col">${escapeHtml(colLab)}</span>`:''}
+          ${date?`<span class="cmt-date">${escapeHtml(date)}</span>`:''}
+          ${resolved?`<span class="cmt-res">résolu</span>`:''}
+        </div>
+        <div class="cmt-text">${text? renderMd(text) : '<span style="color:var(--ink-faint)">(vide)</span>'}</div>
+      </div>`;
+  }).join('');
+  return `<details class="folded comments"><summary>
+      <svg class="chev" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+      Commentaires (${COMMENTS.length})</summary><div class="folded-body cmts">${items}</div></details>`;
+}
+
+/* Persistance dans les options du widget (par widget) : champs repliés + titre */
+function gristOptionsApi(){ return (typeof grist!=='undefined' && grist.widgetApi) ? grist.widgetApi : (typeof grist!=='undefined' ? grist : null); }
+function configPayload(){
+  // Paramétrage réutilisable (sans linkTemplate, propre à chaque page)
+  return { collapsed:[...FOLDED], order: ORDER, title: TITLE_KEY, subtitle: SUBTITLE_KEY, tags: TAGS_KEY, headerImage: HEADER_IMG,
+           reflistMode: RL_MODE, reflistCols: RL_COLS, link: LINK_KEY };
+}
+function applyConfigJson(text){
+  let obj; try{ obj = JSON.parse(text); }catch(e){ toast('Config illisible (JSON invalide)'); return; }
+  if(!obj || typeof obj!=='object'){ toast('Config invalide'); return; }
+  delete obj.linkTemplate;            // ne pas écraser le modèle de lien de cette page
+  applyOptions(obj); saveOptions(); render();
+  const bits=[];
+  if('title' in obj) bits.push('titre');
+  if('subtitle' in obj) bits.push('sous-titre');
+  if('tags' in obj) bits.push('tags');
+  if('headerImage' in obj) bits.push('image');
+  if(Array.isArray(obj.order) && obj.order.length) bits.push('ordre');
+  if(Array.isArray(obj.collapsed)) bits.push(`${obj.collapsed.length} replié${obj.collapsed.length>1?'s':''}`);
+  if(obj.reflistMode) bits.push('listes réf.');
+  toast('Appliqué — ' + (bits.join(', ') || 'rien à appliquer'));
+}
+function applyOptions(opts){
+  if(!opts) return;
+  if(Array.isArray(opts.collapsed)) FOLDED = new Set(opts.collapsed);
+  if(Array.isArray(opts.order)) ORDER = opts.order.slice();
+  if('title' in opts) TITLE_KEY = opts.title || null;
+  if('subtitle' in opts) SUBTITLE_KEY = opts.subtitle || null;
+  if('tags' in opts) TAGS_KEY = opts.tags || null;
+  if('headerImage' in opts) HEADER_IMG = opts.headerImage || null;
+  if(opts.reflistMode && typeof opts.reflistMode==='object') RL_MODE = {...opts.reflistMode};
+  if(opts.reflistCols && typeof opts.reflistCols==='object') RL_COLS = {...opts.reflistCols};
+  if('link' in opts) LINK_KEY = opts.link || 'auto';
+  if('linkTemplate' in opts) LINK_TEMPLATE = opts.linkTemplate || '';
+}
+async function saveOptions(){
+  if(!IN_GRIST) return;
+  try{
+    const api = gristOptionsApi();
+    const payload = { collapsed:[...FOLDED], order: ORDER, title: TITLE_KEY, subtitle: SUBTITLE_KEY, tags: TAGS_KEY, headerImage: HEADER_IMG,
+                      reflistMode: RL_MODE, reflistCols: RL_COLS, link: LINK_KEY, linkTemplate: LINK_TEMPLATE };
+    if(api && api.setOptions) await api.setOptions(payload);
+    else if(api && api.setOption){ for(const [k,v] of Object.entries(payload)) await api.setOption(k, v); }
+  }catch(e){ console.warn('Sauvegarde des options impossible', e); }
+}
+
+function initGrist(){
+  if(typeof grist==='undefined') return false;
+  IN_GRIST = true;
+  grist.ready({ requiredAccess:'full' });
+  // options (champs repliés) — onOptions se déclenche au démarrage et à chaque changement
+  try{
+    if(grist.onOptions) grist.onOptions((opts)=>{ applyOptions(opts); if(CURRENT) render(); });
+  }catch(_){}
+  // expandRefs:false → les colonnes Référence / Liste de références arrivent en
+  // row ids (et non en libellés), pour un rapprochement fiable par identifiant
+  // dans les sous-tableaux (les noms ne sont pas uniques). Les libellés restent
+  // fournis par les colonnes gristHelper_Display.
+  grist.onRecord(async (record)=>{
+    if(!META || Object.keys(META).length===0) await loadMeta();
+    // Enregistrement absent ou vide
+    if(!record || record.id==null || record.id===0){
+      BASE_RECORD = null;
+      if(NAV.length===0){
+        if(mdEditor){ try{ mdEditor.destroy(); }catch(_){} mdEditor=null; }
+        editingKey=null; CURRENT = null; COMMENTS = []; render();
+      }
+      return;
+    }
+    BASE_RECORD = record;
+    if(NAV.length>0) return;     // on navigue dans un enregistrement lié : ne pas écraser
+    // Édition en cours sur le même enregistrement : ne pas re-rendre (préserve l'éditeur)
+    if(editingKey && CURRENT && record.id===CURRENT.id){ CURRENT = record; return; }
+    if(mdEditor){ try{ mdEditor.destroy(); }catch(_){} mdEditor=null; }
+    editingKey=null;
+    if(ACTIVE_TABLE!==TABLE_ID) await loadMetaFor(TABLE_ID);
+    CURRENT = record;
+    render();
+    await Promise.all([loadCommentsForCurrent(), preloadRefRows()]);
+    render();
+  }, { expandRefs:false });
+  // Curseur sur une ligne vide / aucun enregistrement lié → vider la fiche
+  try{
+    if(grist.onNewRecord) grist.onNewRecord(()=>{ CURRENT = null; COMMENTS = []; render(); });
+  }catch(_){}
+  return true;
+}
+
+/* ---- Données de démo (aperçu hors Grist) ---- */
+const DEMO_REFS = {
+  Personnes: [{id:1,label:'Marie Dupont'},{id:2,label:'Jean Martin'},
+              {id:3,label:'Sophie Bernard'},{id:4,label:'Karim Haddad'}],
+};
+function loadDemo(){
+  REFMAP = { 101:'gristHelper_ConditionalRule', 102:'gristHelper_ConditionalRule2' };
+  META = {
+    Nom:        {label:'Nom', type:'Text', order:0, wo:{fontBold:true}},   // style par défaut : gras
+    Statut:     {label:'Statut', type:'Choice', order:1,
+                 wo:{choices:['Prospect','Client','Perdu'],
+                     choiceOptions:{Client:{fillColor:'#d8f5dd',textColor:'#1b5e29'},
+                                    Prospect:{fillColor:'#fff4d6',textColor:'#8a6500'},
+                                    Perdu:{fillColor:'#ffe0e0',textColor:'#9b2222'}}}},
+    Tags:       {label:'Tags', type:'ChoiceList', order:2,
+                 wo:{choices:['SaaS','PME','Urgent','Renouvellement'],
+                     choiceOptions:{Urgent:{fillColor:'#ffe0e0',textColor:'#9b2222'},
+                                    SaaS:{fillColor:'#e4e4fb',textColor:'#3a3a8a'}}}},
+    Responsable:   {label:'Responsable', type:'Ref:Personnes', order:3, wo:{}},
+    Contributeurs: {label:'Contributeurs', type:'RefList:Personnes', order:4, wo:{}},
+    Actif:      {label:'Actif', type:'Bool', order:5, wo:{}},
+    // Montant : règle conditionnelle "si > 20 000 € → fond ambre + gras"
+    Montant:    {label:'Montant (€)', type:'Numeric', order:6,
+                 rules:['L', 101],
+                 wo:{rulesOptions:[{fillColor:'#fff0cc', textColor:'#7a5200', fontBold:true}]}},
+    Echeance:   {label:'Échéance', type:'Date', order:7, wo:{}},
+    SiteWeb:    {label:'Site web', type:'Text', order:8, wo:{widget:'HyperLink'}},
+    Lien:       {label:'Lien', type:'Text', order:10, wo:{}},
+    Pieces:     {label:'Pièces jointes', type:'Attachments', order:11, wo:{}},
+    Logo:       {label:'Logo', type:'Text', order:12, wo:{}},
+    Notes:      {label:'Notes', type:'Text', order:9, wo:{widget:'Markdown'}},
+  };
+  CURRENT = {
+    id:1, Nom:'Acme Corp', Statut:'Client', Tags:['L','SaaS','Renouvellement'],
+    Responsable:2, gristHelper_DisplayResponsable:'Jean Martin',
+    Contributeurs:['L',1,3],
+    Actif:true, Montant:24500, Echeance:Math.floor(Date.parse('2026-09-30')/1000),
+    SiteWeb:'Site Acme https://acme.example.com',
+    Lien:'https://grist.example/doc/demo#a1.s1.r1',
+    Pieces:['L',101,102],
+    Logo:'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="60" height="60"><rect width="60" height="60" rx="14" fill="%234a6cf7"/><text x="30" y="40" font-size="30" font-family="sans-serif" fill="white" text-anchor="middle">A</text></svg>',
+    gristHelper_ConditionalRule:true,   // la règle "Montant > 20 000" est vraie ici
+    Notes:`## Compte clé\n\nContrat **annuel** signé en mars. Interlocuteur : *Marie Dupont*.\n\n- Renouvellement à préparer pour septembre\n- A migré sur l'offre \`Scale\`\n- [Voir le ticket support](https://example.com)\n\n> Très satisfait du support, NPS 9/10.`,
+  };
+  REFCACHE.Personnes = DEMO_REFS.Personnes.slice();   // pour résoudre les libellés en démo
+  // Sous-tableau de démo : méta + lignes de la table « Personnes »
+  META_CACHE.Personnes = { TABLE_REF:0, REFMAP:{}, META:{
+    Nom:   {label:'Nom',   type:'Text',   order:0, wo:{}},
+    Role:  {label:'Rôle',  type:'Choice', order:1, wo:{}},
+    Email: {label:'E-mail',type:'Text',   order:2, wo:{}},
+  }};
+  REFROWS.Personnes = {
+    id:[1,2,3,4],
+    Nom:['Marie Dupont','Jean Martin','Sophie Bernard','Karim Haddad'],
+    Role:['Référente','Support','Commercial','Technique'],
+    Email:['m.dupont@acme.fr','j.martin@acme.fr','s.bernard@acme.fr','k.haddad@acme.fr'],
+  };
+  FOLDED = new Set();               // démo : rien de replié (pour voir le dernier champ extensible)
+  SUBTITLE_KEY = 'Statut';          // démo : sous-titre
+  TAGS_KEY = 'Tags';                // démo : pastilles dans l'en-tête
+  HEADER_IMG = 'Logo';              // démo : image d'en-tête
+  render();
+}
+
+/* ---- Démarrage ---- */
+if(!initGrist()){
+  loadDemo();
+} else {
+  // Filet : si Grist ne pousse aucun enregistrement (table vide / pas de sélection)
+  setTimeout(()=>{ if(!CURRENT) emptyEl.style.display='flex'; }, 600);
+}
+</script>
+</body>
+</html>
