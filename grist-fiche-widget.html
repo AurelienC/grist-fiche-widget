@@ -409,6 +409,17 @@ function icon(kind){
 
 marked.setOptions({breaks:true, gfm:true});
 
+// Les liens issus du markdown s'ouvrent dans un nouvel onglet (sinon ils
+// s'ouvriraient dans l'iframe du widget Grist, ce qui casse la navigation).
+if(window.DOMPurify){
+  DOMPurify.addHook('afterSanitizeAttributes', node=>{
+    if(node.tagName==='A' && node.getAttribute('href')){
+      node.setAttribute('target','_blank');
+      node.setAttribute('rel','noopener noreferrer');
+    }
+  });
+}
+
 /* Tolérance façon Notion : resserre un espace parasite à l'intérieur d'une paire
    **…** ou __…__ (le markdown strict laisserait les marqueurs visibles).
    Ne touche pas au code, aux puces, à l'italique ni au texte autour. */
@@ -1433,6 +1444,11 @@ function capitalize(s){return s.charAt(0).toUpperCase()+s.slice(1);}
 function bindClicks(){
   // Liens hypertexte : naviguer sans déclencher l'édition de la cellule
   wrap.querySelectorAll('.prop-val .lk').forEach(a=>{
+    a.addEventListener('click', e=> e.stopPropagation());
+  });
+  // Liens dans les champs markdown (corps + sous-tableaux) : ils ouvrent un
+  // nouvel onglet (target=_blank) ; on empêche juste l'ouverture de l'éditeur.
+  wrap.querySelectorAll('.md a, .st-md a').forEach(a=>{
     a.addEventListener('click', e=> e.stopPropagation());
   });
   // Ouvrir un enregistrement lié (clic sur une pastille de référence)
