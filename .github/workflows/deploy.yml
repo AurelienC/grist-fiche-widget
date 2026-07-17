@@ -33,7 +33,7 @@ jobs:
         env:
           SSHPASS: ${{ secrets.ALWAYSDATA_SSH_PASSWORD }}
         run: |
-          sshpass -e rsync -avz \
+          sshpass -e rsync -avz --mkpath \
             -e "ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no" \
             grist-fiche-widget.html \
             "${{ secrets.ALWAYSDATA_SSH_USER }}@${{ secrets.ALWAYSDATA_SSH_HOST }}:${{ secrets.ALWAYSDATA_TARGET_PATH }}"
