@@ -1,0 +1,36 @@
+name: Deploy widget vers AlwaysData
+
+# Déploie UNIQUEMENT grist-fiche-widget.html vers l'hébergement AlwaysData.
+# Aucun identifiant dans le dépôt : tout passe par les GitHub Secrets.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - grist-fiche-widget.html   # ne déclenche que si le HTML change
+  workflow_dispatch:              # + déclenchement manuel depuis l'onglet Actions
+
+concurrency:
+  group: deploy-alwaysdata
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prépare la clé SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.ALWAYSDATA_SSH_KEY }}" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          ssh-keyscan -H "${{ secrets.ALWAYSDATA_SSH_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Envoi du fichier HTML (rsync)
+        run: |
+          rsync -avz \
+            -e "ssh -i ~/.ssh/id_deploy -o IdentitiesOnly=yes" \
+            grist-fiche-widget.html \
+            "${{ secrets.ALWAYSDATA_SSH_USER }}@${{ secrets.ALWAYSDATA_SSH_HOST }}:${{ secrets.ALWAYSDATA_TARGET_PATH }}"
