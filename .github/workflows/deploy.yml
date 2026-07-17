@@ -21,16 +21,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Prépare la clé SSH
+      - name: Installe sshpass
+        run: sudo apt-get update && sudo apt-get install -y sshpass
+
+      - name: Enregistre l'empreinte du serveur
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.ALWAYSDATA_SSH_KEY }}" > ~/.ssh/id_deploy
-          chmod 600 ~/.ssh/id_deploy
           ssh-keyscan -H "${{ secrets.ALWAYSDATA_SSH_HOST }}" >> ~/.ssh/known_hosts
 
-      - name: Envoi du fichier HTML (rsync)
+      - name: Envoi du fichier HTML (rsync + mot de passe)
+        env:
+          SSHPASS: ${{ secrets.ALWAYSDATA_SSH_PASSWORD }}
         run: |
-          rsync -avz \
-            -e "ssh -i ~/.ssh/id_deploy -o IdentitiesOnly=yes" \
+          sshpass -e rsync -avz \
+            -e "ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no" \
             grist-fiche-widget.html \
             "${{ secrets.ALWAYSDATA_SSH_USER }}@${{ secrets.ALWAYSDATA_SSH_HOST }}:${{ secrets.ALWAYSDATA_TARGET_PATH }}"
