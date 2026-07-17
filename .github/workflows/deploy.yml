@@ -8,6 +8,7 @@ on:
     branches: [main]
     paths:
       - grist-fiche-widget.html   # ne déclenche que si le HTML change
+      - deploy/htaccess           # ...ou la config anti-cache
   workflow_dispatch:              # + déclenchement manuel depuis l'onglet Actions
 
 concurrency:
@@ -33,7 +34,13 @@ jobs:
         env:
           SSHPASS: ${{ secrets.ALWAYSDATA_SSH_PASSWORD }}
         run: |
-          sshpass -e rsync -avz --mkpath \
-            -e "ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no" \
+          DEST_DIR="$(dirname "${{ secrets.ALWAYSDATA_TARGET_PATH }}")"
+          SSH_OPTS="ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no"
+          # Le widget (renommé widget.html côté serveur)
+          sshpass -e rsync -avz --mkpath -e "$SSH_OPTS" \
             grist-fiche-widget.html \
             "${{ secrets.ALWAYSDATA_SSH_USER }}@${{ secrets.ALWAYSDATA_SSH_HOST }}:${{ secrets.ALWAYSDATA_TARGET_PATH }}"
+          # La config anti-cache (renommée .htaccess dans le même dossier)
+          sshpass -e rsync -avz --mkpath -e "$SSH_OPTS" \
+            deploy/htaccess \
+            "${{ secrets.ALWAYSDATA_SSH_USER }}@${{ secrets.ALWAYSDATA_SSH_HOST }}:${DEST_DIR}/.htaccess"

@@ -1,0 +1,8 @@
+# Déployé en tant que .htaccess dans le dossier du widget sur AlwaysData.
+# Force le navigateur / l'iframe Grist à revalider widget.html à chaque chargement
+# → plus de version figée en cache après un déploiement.
+<IfModule mod_headers.c>
+  <Files "widget.html">
+    Header set Cache-Control "no-cache, must-revalidate"
+  </Files>
+</IfModule>
