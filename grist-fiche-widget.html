@@ -149,6 +149,12 @@
   .chip.ref-open .op{opacity:.5;font-size:11px}
   .prop-val .lk{color:var(--accent);text-decoration:none;border-bottom:1px solid var(--accent-soft)}
   .prop-val .lk:hover{border-bottom-color:var(--accent)}
+  .prop-btn{display:inline-flex;align-items:center;gap:5px;text-decoration:none;
+    background:var(--accent);color:#fff;font-weight:600;font-size:13px;line-height:1;
+    padding:7px 12px;border-radius:8px;box-shadow:0 1px 2px rgba(0,0,0,.12);
+    transition:filter .12s,box-shadow .12s}
+  .prop-btn:hover{filter:brightness(1.06);box-shadow:0 2px 6px rgba(0,0,0,.18)}
+  .prop-btn .op{font-size:12px;opacity:.85}
   .cell-actions{position:absolute;top:2px;right:2px;display:flex;gap:2px;opacity:0;
     background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:1px;
     transition:opacity .12s;pointer-events:none}
@@ -386,7 +392,7 @@
    Widget Grist — Fiche détaillée (vue + édition), style Notion
    ============================================================ */
 
-const WIDGET_BUILD = '2026-06-30 · 39';   // repère anti-cache, visible dans le panneau « Champs »
+const WIDGET_BUILD = '2026-07-21 · 40';   // repère anti-cache, visible dans le panneau « Champs »
 const ICONS = {
   text:'<path d="M4 7V5h16v2M9 5v14m-3 0h6"/>',
   longtext:'<path d="M4 6h16M4 10h16M4 14h10M4 18h7"/>',
@@ -511,6 +517,7 @@ let TAGS_KEY = null;       // colId affiché en pastilles dans l'en-tête (null 
 let HEADER_IMG = null;     // colId d'une image d'en-tête (pièce jointe ou URL) — null = aucune
 let RL_MODE = {};          // {colId: 'chips'|'table'} affichage des références multiples (défaut: table)
 let RL_COLS = {};          // {colId: [colId cible…]} colonnes affichées en mode tableau (vide = 6 premières)
+let BTN_FIELDS = new Set(); // colIds affichés en bouton (champs texte contenant une URL)
 let LINK_KEY = 'auto';     // colonne du lien partageable (SELF_HYPERLINK) : 'auto' | 'none' | colId
 let LINK_TEMPLATE = '';    // modèle de lien d'ancrage collé (Ctrl+Shift+A) : le n° de ligne y est remplacé
 let configuring = false;   // mode configuration (cases à cocher)
@@ -635,6 +642,27 @@ function hyperlinkHtml(val){
   return `<a class="lk" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a>`;
 }
 
+// URL sûre d'un champ texte (HyperLink Grist ou texte simple ressemblant à une URL).
+// Renvoie '' si la valeur n'est pas une URL exploitable.
+function fieldUrl(k){
+  const m = META?.[k]||{}; const v = CURRENT?.[k];
+  if(v==null||v==='') return '';
+  if((m.wo||{}).widget==='HyperLink') return linkHref(v);
+  const s = String(v).trim();
+  if(/^(https?:\/\/|www\.)/i.test(s) || /^[a-z][a-z0-9+.-]*:\/\//i.test(s)) return linkHref(s);
+  return '';
+}
+// Champ éligible à l'affichage « bouton » : type texte (HyperLink ou texte simple)
+function isBtnEligible(k){ return typeKind(META?.[k]?.type)==='text'; }
+// Libellé du bouton : le libellé HyperLink s'il existe, sinon le libellé de la colonne
+function buttonLabel(k){
+  const m = META?.[k]||{}; const v = CURRENT?.[k];
+  if((m.wo||{}).widget==='HyperLink'){
+    const s = String(v==null?'':v).trim(); const parts = s.split(/\s+/);
+    if(parts.length>1) return parts.slice(0,-1).join(' ');
+  }
+  return m.label || k;
+}
 // Texte à copier pour une cellule
 function copyValue(k){
   const m = META?.[k]||{}; const v = CURRENT[k];
@@ -1175,12 +1203,22 @@ function render(){
         html += `</div>`;
       });
     }
+    // Affichage en bouton : champs texte (URL) présentés comme un bouton
+    const btnKeys = keys.filter(isBtnEligible);
+    if(btnKeys.length){
+      html += `<div class="ctitle" style="margin-top:14px">Afficher en bouton (champs contenant une URL)</div>`;
+      html += `<div class="config">` + btnKeys.map(k=>
+        `<div class="row">
+          <input type="checkbox" data-btnfield="${escapeHtml(k)}" ${BTN_FIELDS.has(k)?'checked':''}>
+          <span class="nm">${escapeHtml(META?.[k]?.label||k)}</span>
+          <span class="tag">bouton ↗</span></div>`).join('') + `</div>`;
+    }
     html += `<div class="ctitle">Réutiliser ce paramétrage</div>
       <div class="cfg-io">
         <button class="btn" data-act="cfg-copy">Copier la config</button>
         <button class="btn" data-act="cfg-paste">Coller la config</button>
       </div>
-      <div class="cfg-io-note">Copie titre, sous-titre, tags, ordre, champs repliés et modes de listes. À coller sur une autre page de la même base. (Le modèle de lien reste propre à chaque page.)</div>
+      <div class="cfg-io-note">Copie titre, sous-titre, tags, ordre, champs repliés, modes de listes et boutons. À coller sur une autre page de la même base. (Le modèle de lien reste propre à chaque page.)</div>
       <textarea class="editor cfg-io-box" data-cfgbox="1" placeholder="Colle ici la config puis « Appliquer »…" style="display:none;width:100%;box-sizing:border-box;min-height:70px;margin-top:8px"></textarea>
       <button class="btn primary" data-act="cfg-apply" style="display:none;margin-top:6px">Appliquer</button>`;
     html += `<div class="cfg-ver">Version ${WIDGET_BUILD}</div>`;
@@ -1261,6 +1299,14 @@ function bindToolbar(){
     cb.addEventListener('change', ()=>{
       const k = cb.dataset.fold;
       if(cb.checked) FOLDED.add(k); else FOLDED.delete(k);
+      saveOptions();
+      render();
+    });
+  });
+  wrap.querySelectorAll('[data-btnfield]').forEach(cb=>{
+    cb.addEventListener('change', ()=>{
+      const k = cb.dataset.btnfield;
+      if(cb.checked) BTN_FIELDS.add(k); else BTN_FIELDS.delete(k);
       saveOptions();
       render();
     });
@@ -1434,6 +1480,10 @@ function propRow(k){
       : (ph=true,'Vide');
   } else if(kind==='num'){
     inner = (val==null||val==='')? (ph=true,'Vide') : escapeHtml(String(val));
+  } else if(BTN_FIELDS.has(k) && fieldUrl(k)){
+    // Affichage « bouton » : ouvre l'URL dans un nouvel onglet
+    const href = fieldUrl(k);
+    inner = `<a class="prop-btn" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(buttonLabel(k))} <span class="op">↗</span></a>`;
   } else if((m.wo||{}).widget==='HyperLink'){
     inner = (val==null||val==='')? (ph=true,'Vide') : hyperlinkHtml(val);
   } else {
@@ -1445,8 +1495,9 @@ function propRow(k){
   const stl = cellStyle(k);
   const roAttr = ro ? `data-ro="1" title="Colonne calculée (formule) — non modifiable ici"` : '';
   const isLink = (m.wo||{}).widget==='HyperLink';
+  const isBtn = BTN_FIELDS.has(k) && !!fieldUrl(k);
   const isRef = (kind==='ref'||kind==='reflist');
-  const acts = (ph || kind==='attach' || refEnc || refListEnc) ? '' : cellActions(k, { copy:true, open:isLink, edit:(!ro && (isLink||isRef)) });
+  const acts = (ph || kind==='attach' || refEnc || refListEnc) ? '' : cellActions(k, { copy:true, open:(isLink && !isBtn), edit:(!ro && (isLink||isRef||isBtn)) });
   return `<div class="prop">
       <div class="prop-label">${icon(iconKind(type,false))}<span class="txt">${escapeHtml(label)}</span></div>
       <div class="${cls}" data-key="${k}" ${roAttr} ${stl?`style="${stl}"`:''}>${inner}${acts}</div>
@@ -1459,7 +1510,7 @@ function capitalize(s){return s.charAt(0).toUpperCase()+s.slice(1);}
    ============================================================ */
 function bindClicks(){
   // Liens hypertexte : naviguer sans déclencher l'édition de la cellule
-  wrap.querySelectorAll('.prop-val .lk').forEach(a=>{
+  wrap.querySelectorAll('.prop-val .lk, .prop-val .prop-btn').forEach(a=>{
     a.addEventListener('click', e=> e.stopPropagation());
   });
   // Liens dans les champs markdown (corps + sous-tableaux) : ils ouvrent un
@@ -2075,7 +2126,7 @@ function gristOptionsApi(){ return (typeof grist!=='undefined' && grist.widgetAp
 function configPayload(){
   // Paramétrage réutilisable (sans linkTemplate, propre à chaque page)
   return { collapsed:[...FOLDED], order: ORDER, title: TITLE_KEY, subtitle: SUBTITLE_KEY, tags: TAGS_KEY, headerImage: HEADER_IMG,
-           reflistMode: RL_MODE, reflistCols: RL_COLS, link: LINK_KEY };
+           reflistMode: RL_MODE, reflistCols: RL_COLS, link: LINK_KEY, buttons:[...BTN_FIELDS] };
 }
 function applyConfigJson(text){
   let obj; try{ obj = JSON.parse(text); }catch(e){ toast('Config illisible (JSON invalide)'); return; }
@@ -2090,6 +2141,7 @@ function applyConfigJson(text){
   if(Array.isArray(obj.order) && obj.order.length) bits.push('ordre');
   if(Array.isArray(obj.collapsed)) bits.push(`${obj.collapsed.length} replié${obj.collapsed.length>1?'s':''}`);
   if(obj.reflistMode) bits.push('listes réf.');
+  if(Array.isArray(obj.buttons)) bits.push('boutons');
   toast('Appliqué — ' + (bits.join(', ') || 'rien à appliquer'));
 }
 function applyOptions(opts){
@@ -2103,6 +2155,7 @@ function applyOptions(opts){
   if(opts.reflistMode && typeof opts.reflistMode==='object') RL_MODE = {...opts.reflistMode};
   if(opts.reflistCols && typeof opts.reflistCols==='object') RL_COLS = {...opts.reflistCols};
   if('link' in opts) LINK_KEY = opts.link || 'auto';
+  if(Array.isArray(opts.buttons)) BTN_FIELDS = new Set(opts.buttons);
   if('linkTemplate' in opts) LINK_TEMPLATE = opts.linkTemplate || '';
 }
 async function saveOptions(){
@@ -2110,7 +2163,7 @@ async function saveOptions(){
   try{
     const api = gristOptionsApi();
     const payload = { collapsed:[...FOLDED], order: ORDER, title: TITLE_KEY, subtitle: SUBTITLE_KEY, tags: TAGS_KEY, headerImage: HEADER_IMG,
-                      reflistMode: RL_MODE, reflistCols: RL_COLS, link: LINK_KEY, linkTemplate: LINK_TEMPLATE };
+                      reflistMode: RL_MODE, reflistCols: RL_COLS, link: LINK_KEY, buttons:[...BTN_FIELDS], linkTemplate: LINK_TEMPLATE };
     if(api && api.setOptions) await api.setOptions(payload);
     else if(api && api.setOption){ for(const [k,v] of Object.entries(payload)) await api.setOption(k, v); }
   }catch(e){ console.warn('Sauvegarde des options impossible', e); }
