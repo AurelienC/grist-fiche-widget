@@ -399,7 +399,7 @@
    Widget Grist — Fiche détaillée (vue + édition), style Notion
    ============================================================ */
 
-const WIDGET_BUILD = '2026-07-21 · 41';   // repère anti-cache, visible dans le panneau « Champs »
+const WIDGET_BUILD = '2026-07-21 · 42';   // repère anti-cache, visible dans le panneau « Champs »
 const ICONS = {
   text:'<path d="M4 7V5h16v2M9 5v14m-3 0h6"/>',
   longtext:'<path d="M4 6h16M4 10h16M4 14h10M4 18h7"/>',
@@ -858,6 +858,17 @@ function asReferenceList(v){
   }
   return null;
 }
+// Sentinelle Grist d'une référence vide : « Table[0] » (row id 0). Ne doit rien afficher.
+function isEmptyRefLabel(s){ return typeof s==='string' && /\[0\]\s*$/.test(s.trim()); }
+function isEmptyRefValue(v){
+  if(v==null || v==='' || v===0) return true;
+  return isEmptyRefLabel(v);
+}
+// Nettoie une valeur d'affichage de référence (chaîne ou tableau) des sentinelles vides.
+function cleanRefDisp(d){
+  if(Array.isArray(d)) return asList(d).filter(x=> x!=null && x!=='' && !isEmptyRefLabel(x));
+  return isEmptyRefLabel(d) ? '' : d;
+}
 // Méta de la table cible d'une référence (depuis le cache, ou construite si les métatables sont chargées)
 function targetMeta(tableId){
   if(!tableId) return null;
@@ -894,14 +905,14 @@ async function refOptions(target, visibleColId){
 // mappées). On résout donc via COLREF[displayCol], avec repli sur les anciens noms.
 function refDisplay(k){
   if(!CURRENT) return null;
+  let d = null;
   const dc = META?.[k]?.displayCol;
   const dcol = dc ? COLREF[dc] : null;
-  if(dcol && (dcol in CURRENT)){
-    const d = CURRENT[dcol];
-    if(d!=null && d!=='') return d;
-  }
-  const d2 = CURRENT['gristHelper_Display'+capitalize(k)] ?? CURRENT['gristHelper_Display'];
-  return (d2!=null && d2!=='') ? d2 : null;
+  if(dcol && (dcol in CURRENT) && CURRENT[dcol]!=null && CURRENT[dcol]!=='') d = CURRENT[dcol];
+  else d = CURRENT['gristHelper_Display'+capitalize(k)] ?? CURRENT['gristHelper_Display'];
+  d = cleanRefDisp(d);   // retire les sentinelles « Table[0] » (références vides)
+  if(d==null || d==='' || (Array.isArray(d) && d.length===0)) return null;
+  return d;
 }
 // Libellé d'un id de référence à partir du cache (repli si pas de gristHelper_Display)
 function refLabelFor(key, id){
@@ -1027,10 +1038,10 @@ function subtableBlock(k){
         let dv = (dispCol && trows[dispCol] && r.ri!=null) ? trows[dispCol][r.ri] : null;
         if(dv==null){ dv = v; }   // repli : valeur brute
         if(kind==='reflist'){
-          const labs = asList(dv).filter(x=>x!=null && x!=='');
+          const labs = asList(dv).filter(x=>x!=null && x!=='' && !isEmptyRefLabel(x));
           return `<td${sty}>${labs.length? labs.map(l=>`<span class="chip">${escapeHtml(String(l))}</span>`).join(' ') : ''}</td>`;
         }
-        return `<td${sty}>${(dv==null||dv==='')?'':`<span class="chip">${escapeHtml(String(dv))}</span>`}</td>`;
+        return `<td${sty}>${(dv==null||dv===''||isEmptyRefLabel(dv))?'':`<span class="chip">${escapeHtml(String(dv))}</span>`}</td>`;
       }
       const s = (v==null)?'':String(v);
       const longCell = kind==='text' && (wo.widget==='Markdown' || wo.wrap || s.includes('\n') || s.length>60);
@@ -1410,7 +1421,7 @@ function plainValue(k){
   if(kind==='ref'||kind==='reflist'){
     const d = refDisplay(k);
     if(d!=null && d!=='') return Array.isArray(d)? asList(d).join(', ') : String(d);
-    return asList(v).map(x=>refLabelFor(k,x)??x).join(', ');
+    return asList(v).filter(x=>!isEmptyRefValue(x)).map(x=>refLabelFor(k,x)??x).join(', ');
   }
   return String(v);
 }
@@ -1422,7 +1433,7 @@ function tagsInner(k){
   else if(kind==='choice') labels=(v==null||v==='')?[]:[v];
   else if(kind==='reflist'){
     const d=refDisplay(k);
-    labels = Array.isArray(d)? asList(d) : asList(v).map(x=>refLabelFor(k,x)??x);
+    labels = Array.isArray(d)? asList(d) : asList(v).filter(x=>!isEmptyRefValue(x)).map(x=>refLabelFor(k,x)??x);
   } else { const pv=plainValue(k); labels = pv?[pv]:[]; }
   if(!labels.length) return '<span class="placeholder">Vide</span>';
   return labels.map(l=>chipHtml(String(l), m.wo||{})).join('');
@@ -1464,19 +1475,23 @@ function propRow(k){
     inner = (val==null||val==='')? (ph=true,'Vide') : escapeHtml(fmtDate(val,type));
   } else if(kind==='ref'){
     const target = refTarget(type);
-    let id = (typeof val==='number') ? val : null;
-    if(id==null && typeof val==='string' && REFCACHE[target]){
-      const f = REFCACHE[target].find(o=>o.label===val); if(f) id=f.id;
+    if(isEmptyRefValue(val)){            // référence vide (0 / null / sentinelle « Table[0] »)
+      inner = (ph=true,'Vide');
+    } else {
+      let id = (typeof val==='number') ? val : null;
+      if(id==null && typeof val==='string' && REFCACHE[target]){
+        const f = REFCACHE[target].find(o=>o.label===val); if(f) id=f.id;
+      }
+      const dispHelper = refDisplay(k);
+      const disp = (dispHelper!=null && dispHelper!=='') ? dispHelper
+                 : (refLabelFor(k, val) ?? (typeof val==='number' ? '#'+val : String(val)));
+      inner = (disp==null||disp==='')
+        ? (ph=true,'Vide')
+        : `<span class="chips">${refChip(target, id, disp)}</span>`;
     }
-    const dispHelper = refDisplay(k);
-    const disp = (dispHelper!=null && dispHelper!=='') ? dispHelper
-               : (val ? (refLabelFor(k, val) ?? val) : '');
-    inner = (disp==null||disp===''||val===0||val==null)
-      ? (ph=true,'Vide')
-      : `<span class="chips">${refChip(target, id, disp)}</span>`;
   } else if(kind==='reflist'){
     const target = refTarget(type);
-    const ids = asList(val).filter(x=>x!=='' && x!=null);
+    const ids = asList(val).filter(x=> x!=='' && x!=null && !isEmptyRefValue(x));
     const dispHelper = refDisplay(k);
     let labels;
     if(Array.isArray(dispHelper)) labels = asList(dispHelper);
