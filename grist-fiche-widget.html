@@ -155,6 +155,13 @@
     transition:filter .12s,box-shadow .12s}
   .prop-btn:hover{filter:brightness(1.06);box-shadow:0 2px 6px rgba(0,0,0,.18)}
   .prop-btn .op{font-size:12px;opacity:.85}
+  /* Barre de menu (boutons promus en haut de fiche) */
+  .menubar{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 16px}
+  /* Options par champ dans le panneau « réordonner » */
+  .config .row .row-opts{display:inline-flex;align-items:center;gap:10px;flex:0 0 auto}
+  .config .row .ropt{display:inline-flex;align-items:center;gap:4px;font-size:12px;
+    color:var(--ink-faint);cursor:pointer;user-select:none;white-space:nowrap}
+  .config .row .ropt input{width:14px;height:14px}
   .cell-actions{position:absolute;top:2px;right:2px;display:flex;gap:2px;opacity:0;
     background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:1px;
     transition:opacity .12s;pointer-events:none}
@@ -392,7 +399,7 @@
    Widget Grist — Fiche détaillée (vue + édition), style Notion
    ============================================================ */
 
-const WIDGET_BUILD = '2026-07-21 · 40';   // repère anti-cache, visible dans le panneau « Champs »
+const WIDGET_BUILD = '2026-07-21 · 41';   // repère anti-cache, visible dans le panneau « Champs »
 const ICONS = {
   text:'<path d="M4 7V5h16v2M9 5v14m-3 0h6"/>',
   longtext:'<path d="M4 6h16M4 10h16M4 14h10M4 18h7"/>',
@@ -1122,6 +1129,12 @@ function render(){
   else hdr += bodyHtml;
   html += `<div class="fiche-header">${hdr}</div>`;
 
+  // Barre de menu : champs promus en bouton (ouvrent leur URL dans un nouvel onglet).
+  // Affichée même si le champ est masqué de la fiche.
+  const menuBtns = keys.filter(k=>BTN_FIELDS.has(k) && fieldUrl(k)).map(k=>
+    `<a class="prop-btn" href="${escapeHtml(fieldUrl(k))}" target="_blank" rel="noopener noreferrer">${escapeHtml(buttonLabel(k))} <span class="op">↗</span></a>`);
+  if(menuBtns.length) html += `<div class="menubar">${menuBtns.join('')}</div>`;
+
   // Panneau de configuration (sous l'en-tête)
   if(configuring){
     html += `<div class="config">`;
@@ -1150,14 +1163,22 @@ function render(){
         placeholder="https://…/p/19#a1.s28.r5" style="margin-bottom:6px;width:100%;box-sizing:border-box">
       <div style="font-size:11.5px;color:var(--ink-faint);margin-bottom:14px">
         Le widget remplace le numéro de ligne automatiquement — un seul collage par page, valable pour toutes les lignes. Aucune formule nécessaire.</div>`;
-    html += `<div class="ctitle">Glisser pour réordonner · cocher pour replier</div>`;
+    html += `<div class="ctitle">Champs — glisser pour réordonner · masquer · bouton</div>`;
     keys.forEach(k=>{
       const m = META?.[k]||{};
+      const eligible = isBtnEligible(k);
+      const btnOpt = eligible
+        ? `<label class="ropt" title="Afficher ce champ comme bouton dans la barre du haut (ouvre l'URL dans un nouvel onglet)">
+             <input type="checkbox" data-btnfield="${escapeHtml(k)}" ${BTN_FIELDS.has(k)?'checked':''}>bouton</label>`
+        : '';
       html += `<div class="row" draggable="true" data-col="${escapeHtml(k)}">
           <span class="grip" title="Glisser">⠿</span>
-          <input type="checkbox" data-fold="${k}" ${FOLDED.has(k)?'checked':''}>
           <span class="nm">${escapeHtml(m.label||k)}</span>
-          <span class="tag">${escapeHtml(baseType(m.type||'Text'))}${k===titleKey?' · titre':''}</span></div>`;
+          <span class="tag">${escapeHtml(baseType(m.type||'Text'))}${k===titleKey?' · titre':''}</span>
+          <span class="row-opts">${btnOpt}
+            <label class="ropt" title="Masquer ce champ de la fiche (replié dans « Autres champs »)">
+              <input type="checkbox" data-fold="${escapeHtml(k)}" ${FOLDED.has(k)?'checked':''}>masquer</label>
+          </span></div>`;
     });
     html += `</div>`;
 
@@ -1202,16 +1223,6 @@ function render(){
         }
         html += `</div>`;
       });
-    }
-    // Affichage en bouton : champs texte (URL) présentés comme un bouton
-    const btnKeys = keys.filter(isBtnEligible);
-    if(btnKeys.length){
-      html += `<div class="ctitle" style="margin-top:14px">Afficher en bouton (champs contenant une URL)</div>`;
-      html += `<div class="config">` + btnKeys.map(k=>
-        `<div class="row">
-          <input type="checkbox" data-btnfield="${escapeHtml(k)}" ${BTN_FIELDS.has(k)?'checked':''}>
-          <span class="nm">${escapeHtml(META?.[k]?.label||k)}</span>
-          <span class="tag">bouton ↗</span></div>`).join('') + `</div>`;
     }
     html += `<div class="ctitle">Réutiliser ce paramétrage</div>
       <div class="cfg-io">
@@ -1480,10 +1491,6 @@ function propRow(k){
       : (ph=true,'Vide');
   } else if(kind==='num'){
     inner = (val==null||val==='')? (ph=true,'Vide') : escapeHtml(String(val));
-  } else if(BTN_FIELDS.has(k) && fieldUrl(k)){
-    // Affichage « bouton » : ouvre l'URL dans un nouvel onglet
-    const href = fieldUrl(k);
-    inner = `<a class="prop-btn" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(buttonLabel(k))} <span class="op">↗</span></a>`;
   } else if((m.wo||{}).widget==='HyperLink'){
     inner = (val==null||val==='')? (ph=true,'Vide') : hyperlinkHtml(val);
   } else {
@@ -1495,9 +1502,8 @@ function propRow(k){
   const stl = cellStyle(k);
   const roAttr = ro ? `data-ro="1" title="Colonne calculée (formule) — non modifiable ici"` : '';
   const isLink = (m.wo||{}).widget==='HyperLink';
-  const isBtn = BTN_FIELDS.has(k) && !!fieldUrl(k);
   const isRef = (kind==='ref'||kind==='reflist');
-  const acts = (ph || kind==='attach' || refEnc || refListEnc) ? '' : cellActions(k, { copy:true, open:(isLink && !isBtn), edit:(!ro && (isLink||isRef||isBtn)) });
+  const acts = (ph || kind==='attach' || refEnc || refListEnc) ? '' : cellActions(k, { copy:true, open:isLink, edit:(!ro && (isLink||isRef)) });
   return `<div class="prop">
       <div class="prop-label">${icon(iconKind(type,false))}<span class="txt">${escapeHtml(label)}</span></div>
       <div class="${cls}" data-key="${k}" ${roAttr} ${stl?`style="${stl}"`:''}>${inner}${acts}</div>
@@ -2218,6 +2224,7 @@ const DEMO_REFS = {
 };
 function loadDemo(){
   REFMAP = { 101:'gristHelper_ConditionalRule', 102:'gristHelper_ConditionalRule2' };
+  BTN_FIELDS = new Set(['SiteWeb']);   // aperçu : le site web est promu en bouton (barre du haut)
   META = {
     Nom:        {label:'Nom', type:'Text', order:0, wo:{fontBold:true}},   // style par défaut : gras
     Statut:     {label:'Statut', type:'Choice', order:1,
