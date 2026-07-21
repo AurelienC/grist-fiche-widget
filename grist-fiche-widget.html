@@ -852,6 +852,22 @@ async function refOptions(target, visibleColId){
   REFCACHE[target] = opts;
   return opts;
 }
+// Valeur de la colonne d'affichage (« montrer la colonne ») d'une référence.
+// En widget non mappé (accès complet), Grist nomme ces colonnes gristHelper_Display,
+// gristHelper_Display2… dont le vrai nom interne est donné par displayCol dans les
+// métadonnées — et NON gristHelper_Display<NomColonne> (nommage réservé aux colonnes
+// mappées). On résout donc via COLREF[displayCol], avec repli sur les anciens noms.
+function refDisplay(k){
+  if(!CURRENT) return null;
+  const dc = META?.[k]?.displayCol;
+  const dcol = dc ? COLREF[dc] : null;
+  if(dcol && (dcol in CURRENT)){
+    const d = CURRENT[dcol];
+    if(d!=null && d!=='') return d;
+  }
+  const d2 = CURRENT['gristHelper_Display'+capitalize(k)] ?? CURRENT['gristHelper_Display'];
+  return (d2!=null && d2!=='') ? d2 : null;
+}
 // Libellé d'un id de référence à partir du cache (repli si pas de gristHelper_Display)
 function refLabelFor(key, id){
   const target = refTarget(META?.[key]?.type);
@@ -904,7 +920,7 @@ function reflistRows(k, target){
   const tids = trows.id || [];
   const idIndex = new Map(tids.map((id,i)=>[String(id), i]));
   const raw = asList(CURRENT[k]).filter(x=>x!=null && x!=='');
-  const dispHelper = CURRENT['gristHelper_Display'+capitalize(k)] ?? CURRENT['gristHelper_Display'];
+  const dispHelper = refDisplay(k);
   const labels = Array.isArray(dispHelper) ? asList(dispHelper) : [];
   const visCol = COLREF[META?.[k]?.visibleCol] || null;   // colonne d'affichage de la table cible
   return raw.map((v,i)=>{
@@ -1335,7 +1351,7 @@ function plainValue(k){
   if(kind==='choice') return String(v);
   if(kind==='choicelist') return asList(v).join(', ');
   if(kind==='ref'||kind==='reflist'){
-    const d = CURRENT['gristHelper_Display'+capitalize(k)] ?? CURRENT['gristHelper_Display'];
+    const d = refDisplay(k);
     if(d!=null && d!=='') return Array.isArray(d)? asList(d).join(', ') : String(d);
     return asList(v).map(x=>refLabelFor(k,x)??x).join(', ');
   }
@@ -1348,7 +1364,7 @@ function tagsInner(k){
   if(kind==='choicelist') labels=asList(v);
   else if(kind==='choice') labels=(v==null||v==='')?[]:[v];
   else if(kind==='reflist'){
-    const d=CURRENT['gristHelper_Display'+capitalize(k)] ?? CURRENT['gristHelper_Display'];
+    const d=refDisplay(k);
     labels = Array.isArray(d)? asList(d) : asList(v).map(x=>refLabelFor(k,x)??x);
   } else { const pv=plainValue(k); labels = pv?[pv]:[]; }
   if(!labels.length) return '<span class="placeholder">Vide</span>';
@@ -1367,13 +1383,13 @@ function propRow(k){
   const refListEnc = !refEnc ? asReferenceList(val) : null;
   if(refEnc){
     // Référence calculée (formule / type Any) : ['R', table, id] → pastille ouvrable
-    const dispHelper = CURRENT['gristHelper_Display'+capitalize(k)] ?? CURRENT['gristHelper_Display'];
+    const dispHelper = refDisplay(k);
     const lbl = (dispHelper!=null && dispHelper!=='') ? dispHelper : (refLabelFor(k, refEnc.id) ?? ('#'+refEnc.id));
     inner = `<span class="chips">${refChip(refEnc.target, refEnc.id, lbl)}</span>`;
   } else if(refListEnc){
     // Liste de références calculée : ['r', table, [ids]] → pastilles ouvrables (comme une RefList de données)
     const ids = refListEnc.ids;
-    const dispHelper = CURRENT['gristHelper_Display'+capitalize(k)] ?? CURRENT['gristHelper_Display'];
+    const dispHelper = refDisplay(k);
     const labels = Array.isArray(dispHelper) ? asList(dispHelper) : ids.map(id=> refLabelFor(k, id) ?? id);
     inner = ids.length
       ? `<span class="chips">${ids.map((id,i)=>refChip(refListEnc.target, id, labels[i] ?? id)).join('')}</span>`
@@ -1395,7 +1411,7 @@ function propRow(k){
     if(id==null && typeof val==='string' && REFCACHE[target]){
       const f = REFCACHE[target].find(o=>o.label===val); if(f) id=f.id;
     }
-    const dispHelper = CURRENT['gristHelper_Display'+capitalize(k)] ?? CURRENT['gristHelper_Display'];
+    const dispHelper = refDisplay(k);
     const disp = (dispHelper!=null && dispHelper!=='') ? dispHelper
                : (val ? (refLabelFor(k, val) ?? val) : '');
     inner = (disp==null||disp===''||val===0||val==null)
@@ -1404,7 +1420,7 @@ function propRow(k){
   } else if(kind==='reflist'){
     const target = refTarget(type);
     const ids = asList(val).filter(x=>x!=='' && x!=null);
-    const dispHelper = CURRENT['gristHelper_Display'+capitalize(k)] ?? CURRENT['gristHelper_Display'];
+    const dispHelper = refDisplay(k);
     let labels;
     if(Array.isArray(dispHelper)) labels = asList(dispHelper);
     else labels = ids.map(id=> refLabelFor(k, id) ?? id);
