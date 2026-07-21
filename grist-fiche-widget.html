@@ -399,7 +399,7 @@
    Widget Grist — Fiche détaillée (vue + édition), style Notion
    ============================================================ */
 
-const WIDGET_BUILD = '2026-07-21 · 42';   // repère anti-cache, visible dans le panneau « Champs »
+const WIDGET_BUILD = '2026-07-21 · 43';   // repère anti-cache, visible dans le panneau « Champs »
 const ICONS = {
   text:'<path d="M4 7V5h16v2M9 5v14m-3 0h6"/>',
   longtext:'<path d="M4 6h16M4 10h16M4 14h10M4 18h7"/>',
@@ -914,11 +914,33 @@ function refDisplay(k){
   if(d==null || d==='' || (Array.isArray(d) && d.length===0)) return null;
   return d;
 }
-// Libellé d'un id de référence à partir du cache (repli si pas de gristHelper_Display)
+// Index {id → indice de ligne} d'une table cible préchargée (mémoïsé par objet de lignes)
+let REFIDX = new WeakMap();
+function targetRowIndex(target){
+  const trows = REFROWS[target];
+  if(!trows || !Array.isArray(trows.id)) return null;
+  let idx = REFIDX.get(trows);
+  if(!idx){ idx = new Map(trows.id.map((rid,i)=>[rid,i])); REFIDX.set(trows, idx); }
+  return idx;
+}
+// Libellé d'un id de référence. Résout dans l'ordre :
+//  1) le cache d'options (REFCACHE / DEMO_REFS)
+//  2) les lignes préchargées de la table cible (REFROWS) via la colonne « montrer la colonne »
+// Indispensable car le record d'onRecord ne fournit pas toujours les colonnes gristHelper_Display.
 function refLabelFor(key, id){
   const target = refTarget(META?.[key]?.type);
   const cache = REFCACHE[target] || (typeof DEMO_REFS!=='undefined'? DEMO_REFS[target]:null);
   if(cache){ const f = cache.find(o=>o.id===id); if(f) return f.label; }
+  const trows = REFROWS[target];
+  if(trows){
+    const idx = targetRowIndex(target);
+    const j = idx ? idx.get(id) : undefined;
+    if(j!=null){
+      const visCol = COLREF[META?.[key]?.visibleCol] || refFirstTextCol(trows);
+      const lbl = (visCol && trows[visCol]) ? trows[visCol][j] : null;
+      if(lbl!=null && lbl!=='' && !isEmptyRefLabel(lbl)) return String(lbl);
+    }
+  }
   return null;
 }
 
@@ -2076,17 +2098,23 @@ async function preloadRefRows(){
   if(!IN_GRIST || !CURRENT || !META) return;
   try{
     await fetchMetatables();
-    const targets = new Set();
+    // Toutes les références (simples et multiples) avec des valeurs : on précharge la
+    // table cible pour résoudre les libellés (« montrer la colonne »), même hors sous-tableau.
+    const labelTargets = new Set();   // présence suffisante (libellés)
+    const freshTargets = new Set();   // sous-tableau : données toujours rafraîchies
     for(const k in META){
-      if(typeKind(META[k].type)!=='reflist') continue;
-      if((RL_MODE[k]||'table')!=='table') continue;     // mode labels : pas de préchargement
-      const ids = asList(CURRENT[k]).filter(x=>x!=null && x!=='');
+      const kind = typeKind(META[k].type);
+      if(kind!=='ref' && kind!=='reflist') continue;
+      const ids = asList(CURRENT[k]).filter(x=>x!=null && x!=='' && !isEmptyRefValue(x));
       if(!ids.length) continue;
-      const t = refTarget(META[k].type); if(t) targets.add(t);
+      const t = refTarget(META[k].type); if(!t) continue;
+      labelTargets.add(t);
+      if(kind==='reflist' && (RL_MODE[k]||'table')==='table') freshTargets.add(t);
     }
-    for(const t of targets){
+    for(const t of labelTargets){
       buildMetaFor(t);                                   // méta de la table liée (cache)
-      REFROWS[t] = await grist.docApi.fetchTable(t);     // lignes rafraîchies (évite un cache périmé)
+      // rafraîchi pour les sous-tableaux ; sinon chargé une seule fois (perf sur grandes tables)
+      if(freshTargets.has(t) || !REFROWS[t]) REFROWS[t] = await grist.docApi.fetchTable(t);
     }
   }catch(e){ console.warn('Préchargement des sous-tableaux impossible', e); }
 }
