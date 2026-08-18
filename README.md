@@ -6,6 +6,9 @@
 
 Ce widget affiche **un enregistrement à la fois** sous forme de fiche lisible : titre, sous-titre, pastilles, propriétés en colonnes et blocs de texte long. Tout est **éditable au clic**, les références sont **ouvrables** pour naviguer d'une fiche à l'autre, et les pièces jointes s'ouvrent dans une **visionneuse intégrée**.
 
+<img width="1037" height="895" alt="image" src="https://github.com/user-attachments/assets/ca7e31fb-c240-4ef6-a1ef-680c3f6f420e" />
+
+
 ## Fonctionnalités
 
 - **Édition au clic**, champ par champ : texte, nombre, booléen, date, choix, choix multiples, références et références multiples.
