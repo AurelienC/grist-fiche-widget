@@ -399,7 +399,7 @@
    Widget Grist — Fiche détaillée (vue + édition), style Notion
    ============================================================ */
 
-const WIDGET_BUILD = '2026-07-21 · 43';   // repère anti-cache, visible dans le panneau « Champs »
+const WIDGET_BUILD = '2026-08-20 · 44';   // repère anti-cache, visible dans le panneau « Champs »
 const ICONS = {
   text:'<path d="M4 7V5h16v2M9 5v14m-3 0h6"/>',
   longtext:'<path d="M4 6h16M4 10h16M4 14h10M4 18h7"/>',
@@ -882,6 +882,14 @@ function refRowId(v){
   }
   return null;
 }
+// Libellé de repli quand la résolution échoue : ne JAMAIS afficher la repr brute.
+// « Table[0] » (référence vide) → '' ; « Table[123] » → '#123' ; sinon la valeur telle quelle.
+function refFallbackLabel(v){
+  const rid = refRowId(v);
+  if(rid!=null) return '#'+rid;
+  if(isRefRepr(v) || isEmptyRefLabel(v) || v==null || v===0) return '';
+  return String(v);
+}
 // Nettoie une valeur d'affichage de référence (chaîne ou tableau) des sentinelles vides
 // et des représentations « Table[id] », qui doivent être résolues en libellé.
 function cleanRefDisp(d){
@@ -1007,7 +1015,7 @@ function fmtScalar(meta, value){
       const lbl = labelFromTarget(tt, meta.visibleCol, rid);
       return escapeHtml(lbl ?? ('#'+rid));
     }
-    return escapeHtml(String(value));
+    return escapeHtml(refFallbackLabel(value));
   }
   if(kind==='reflist'){ return escapeHtml(asList(value).filter(x=>x!=null&&x!=='').length+' lié(s)'); }
   return escapeHtml(String(value));
@@ -1038,7 +1046,7 @@ function reflistRows(k, target){
       }
     }
     const label = (labels[i]!=null && labels[i]!=='') ? labels[i]
-      : (rowId!=null ? (labelFromTarget(target, META?.[k]?.visibleCol, rowId) ?? ('#'+rowId)) : v);
+      : (rowId!=null ? (labelFromTarget(target, META?.[k]?.visibleCol, rowId) ?? ('#'+rowId)) : refFallbackLabel(v));
     return { rowId, ri, label };
   });
 }
@@ -1052,7 +1060,7 @@ function subtableBlock(k){
   const head = `<div class="body-head">${icon('ref')}<span>${escapeHtml(label)}</span> <span class="st-count">${ids.length}</span></div>`;
   const tcache = META_CACHE[target], trows = REFROWS[target];
   if(!tcache || !trows){   // pas encore préchargé : repli en pastilles cliquables
-    const chips = ids.map(id=>refChip(target, refRowId(id), refLabelFor(k,id) ?? id)).join('');
+    const chips = ids.map(id=>refChip(target, refRowId(id), refLabelFor(k,id) ?? refFallbackLabel(id))).join('');
     return `<div class="body-block">${head}<div class="chips">${chips||'<span class="placeholder">Vide</span>'}</div></div>`;
   }
   const tmeta = tcache.META;
@@ -1098,13 +1106,13 @@ function subtableBlock(k){
         if(kind==='reflist'){
           let labs = asList(dv).filter(x=>x!=null && x!=='');
           if(!labs.length) labs = asList(v).map(x=>{ const rid=refRowId(x);
-            return rid!=null ? (labelFromTarget(sub, cm.visibleCol, rid) ?? ('#'+rid)) : x;
+            return rid!=null ? (labelFromTarget(sub, cm.visibleCol, rid) ?? ('#'+rid)) : refFallbackLabel(x);
           }).filter(x=>x!=null && x!=='' && !isEmptyRefLabel(x));
           return `<td${sty}>${labs.length? labs.map(l=>`<span class="chip">${escapeHtml(String(l))}</span>`).join(' ') : ''}</td>`;
         }
         if(dv==null || dv===''){   // repli : résoudre le row id dans la table cible
           const rid = refRowId(v);
-          dv = rid!=null ? (labelFromTarget(sub, cm.visibleCol, rid) ?? ('#'+rid)) : v;
+          dv = rid!=null ? (labelFromTarget(sub, cm.visibleCol, rid) ?? ('#'+rid)) : refFallbackLabel(v);
         }
         return `<td${sty}>${(dv==null||dv===''||isEmptyRefLabel(dv))?'':`<span class="chip">${escapeHtml(String(dv))}</span>`}</td>`;
       }
@@ -1486,7 +1494,7 @@ function plainValue(k){
   if(kind==='ref'||kind==='reflist'){
     const d = refDisplay(k);
     if(d!=null && d!=='') return Array.isArray(d)? asList(d).join(', ') : String(d);
-    return asList(v).filter(x=>!isEmptyRefValue(x)).map(x=>refLabelFor(k,x)??x).join(', ');
+    return asList(v).filter(x=>!isEmptyRefValue(x)).map(x=>refLabelFor(k,x) ?? refFallbackLabel(x)).filter(x=>x!=='').join(', ');
   }
   return String(v);
 }
@@ -1498,7 +1506,8 @@ function tagsInner(k){
   else if(kind==='choice') labels=(v==null||v==='')?[]:[v];
   else if(kind==='reflist'){
     const d=refDisplay(k);
-    labels = Array.isArray(d)? asList(d) : asList(v).filter(x=>!isEmptyRefValue(x)).map(x=>refLabelFor(k,x)??x);
+    labels = Array.isArray(d)? asList(d)
+      : asList(v).filter(x=>!isEmptyRefValue(x)).map(x=>refLabelFor(k,x) ?? refFallbackLabel(x)).filter(x=>x!=='');
   } else { const pv=plainValue(k); labels = pv?[pv]:[]; }
   if(!labels.length) return '<span class="placeholder">Vide</span>';
   return labels.map(l=>chipHtml(String(l), m.wo||{})).join('');
@@ -1517,15 +1526,15 @@ function propRow(k){
   if(refEnc){
     // Référence calculée (formule / type Any) : ['R', table, id] → pastille ouvrable
     const dispHelper = refDisplay(k);
-    const lbl = (dispHelper!=null && dispHelper!=='') ? dispHelper : (refLabelFor(k, refEnc.id) ?? ('#'+refEnc.id));
+    const lbl = (dispHelper!=null && dispHelper!=='') ? dispHelper : (refLabelFor(k, refEnc.id) ?? ('#'+refEnc.id));   // repr impossible : id numérique
     inner = `<span class="chips">${refChip(refEnc.target, refEnc.id, lbl)}</span>`;
   } else if(refListEnc){
     // Liste de références calculée : ['r', table, [ids]] → pastilles ouvrables (comme une RefList de données)
     const ids = refListEnc.ids;
     const dispHelper = refDisplay(k);
-    const labels = Array.isArray(dispHelper) ? asList(dispHelper) : ids.map(id=> refLabelFor(k, id) ?? id);
+    const labels = Array.isArray(dispHelper) ? asList(dispHelper) : ids.map(id=> refLabelFor(k, id) ?? refFallbackLabel(id));
     inner = ids.length
-      ? `<span class="chips">${ids.map((id,i)=>refChip(refListEnc.target, id, labels[i] ?? id)).join('')}</span>`
+      ? `<span class="chips">${ids.map((id,i)=>refChip(refListEnc.target, id, labels[i] ?? refFallbackLabel(id))).join('')}</span>`
       : (ph=true,'Vide');
   } else if(kind==='bool'){
     inner = `<span class="bool ${val?'on':''}"><span class="box">
@@ -1549,7 +1558,7 @@ function propRow(k){
       }
       const dispHelper = refDisplay(k);
       const disp = (dispHelper!=null && dispHelper!=='') ? dispHelper
-                 : (refLabelFor(k, val) ?? (id!=null ? '#'+id : String(val)));
+                 : (refLabelFor(k, val) ?? refFallbackLabel(val));
       inner = (disp==null||disp==='')
         ? (ph=true,'Vide')
         : `<span class="chips">${refChip(target, id, disp)}</span>`;
@@ -1560,9 +1569,9 @@ function propRow(k){
     const dispHelper = refDisplay(k);
     let labels;
     if(Array.isArray(dispHelper)) labels = asList(dispHelper);
-    else labels = ids.map(id=> refLabelFor(k, id) ?? id);
+    else labels = ids.map(id=> refLabelFor(k, id) ?? refFallbackLabel(id));
     inner = ids.length
-      ? `<span class="chips">${ids.map((id,i)=>refChip(target, refRowId(id), labels[i] ?? id)).join('')}</span>`
+      ? `<span class="chips">${ids.map((id,i)=>refChip(target, refRowId(id), labels[i] ?? refFallbackLabel(id))).join('')}</span>`
       : (ph=true,'Vide');
   } else if(kind==='attach'){
     const ids = asList(val).filter(x=>x!=='' && x!=null);
@@ -1573,6 +1582,11 @@ function propRow(k){
     inner = (val==null||val==='')? (ph=true,'Vide') : escapeHtml(String(val));
   } else if((m.wo||{}).widget==='HyperLink'){
     inner = (val==null||val==='')? (ph=true,'Vide') : hyperlinkHtml(val);
+  } else if(isRefRepr(val)){
+    // Colonne Any / formule renvoyant un enregistrement : « Table[id] » n'est pas un libellé
+    const rid = refRowId(val), tgt = (REF_REPR_RE.exec(String(val).trim())||[])[1];
+    const lbl = rid!=null ? (labelFromTarget(tgt, null, rid) ?? ('#'+rid)) : '';
+    inner = lbl ? `<span class="chips">${refChip(tgt, rid, lbl)}</span>` : (ph=true,'Vide');
   } else {
     inner = (val==null||val==='')? (ph=true,'Vide') : escapeHtml(String(val));
   }
@@ -2154,10 +2168,21 @@ async function preloadRefRows(){
       labelTargets.add(t);
       if(kind==='reflist' && (RL_MODE[k]||'table')==='table') freshTargets.add(t);
     }
+    // Repr « Table[id] » dans une colonne Any / formule : la table cible est dans la valeur
+    for(const k in CURRENT){
+      for(const x of asList(CURRENT[k])){
+        const m = isRefRepr(x) ? REF_REPR_RE.exec(String(x).trim()) : null;
+        if(m && +m[2] > 0) labelTargets.add(m[1]);
+      }
+    }
     for(const t of labelTargets){
-      buildMetaFor(t);                                   // méta de la table liée (cache)
-      // rafraîchi pour les sous-tableaux ; sinon chargé une seule fois (perf sur grandes tables)
-      if(freshTargets.has(t) || !REFROWS[t]) REFROWS[t] = await grist.docApi.fetchTable(t);
+      // une table par une : un nom de table invalide (repr issue d'un texte quelconque)
+      // ne doit pas empêcher le chargement des suivantes
+      try{
+        buildMetaFor(t);                                 // méta de la table liée (cache)
+        // rafraîchi pour les sous-tableaux ; sinon chargé une seule fois (perf sur grandes tables)
+        if(freshTargets.has(t) || !REFROWS[t]) REFROWS[t] = await grist.docApi.fetchTable(t);
+      }catch(e){ console.warn('Table liée illisible', t, e); }
     }
   }catch(e){ console.warn('Préchargement des sous-tableaux impossible', e); }
 }
