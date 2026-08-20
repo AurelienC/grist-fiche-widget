@@ -399,7 +399,7 @@
    Widget Grist — Fiche détaillée (vue + édition), style Notion
    ============================================================ */
 
-const WIDGET_BUILD = '2026-08-20 · 44';   // repère anti-cache, visible dans le panneau « Champs »
+const WIDGET_BUILD = '2026-08-20 · 45';   // repère anti-cache, visible dans le panneau « Champs »
 const ICONS = {
   text:'<path d="M4 7V5h16v2M9 5v14m-3 0h6"/>',
   longtext:'<path d="M4 6h16M4 10h16M4 14h10M4 18h7"/>',
@@ -890,6 +890,33 @@ function refFallbackLabel(v){
   if(isRefRepr(v) || isEmptyRefLabel(v) || v==null || v===0) return '';
   return String(v);
 }
+// Filet de sécurité appliqué au HTML final : quelle que soit la branche de rendu,
+// aucune repr « Table[id] » ne doit atteindre l'écran. Les valeurs étant échappées,
+// une repr apparaît forcément comme texte de nœud (entre « > » et « < »).
+//  · id 0  → référence vide : la pastille entière est retirée
+//  · id > 0 → libellé résolu dans la table cible, à défaut « #id »
+// Journalise chaque occurrence : sert à identifier la branche fautive.
+// Pastille ou cellule dont le texte entier est une repr (les valeurs sont échappées,
+// donc la repr est forcément un texte de nœud). Volontairement limité aux pastilles et
+// aux cellules de sous-tableau : un champ markdown contenant « Mot[12] » n'est pas touché.
+const REPR_CHIP_RE = /(<span class="chip[^"]*"[^>]*>)(\s*)([A-Za-z_][A-Za-z0-9_]*)\[(\d+)\](\s*)((?:<span class="op">[^<]*<\/span>)?\s*<\/span>)/g;
+const REPR_TD_RE   = /(<td[^>]*>)(\s*)([A-Za-z_][A-Za-z0-9_]*)\[(\d+)\](\s*)(<\/td>)/g;
+function scrubReprHtml(html){
+  let n = 0;
+  const fix = (m0, open, sp1, tgt, id, sp2, close, empty) => {
+    const rid = +id; n++;
+    console.warn('[grist-fiche] repr non résolue au rendu :', tgt+'['+rid+']', '— table préchargée :', !!REFROWS[tgt]);
+    if(!rid) return empty;                        // référence vide : rien à afficher
+    return open + sp1 + escapeHtml(labelFromTarget(tgt, null, rid) ?? ('#'+rid)) + sp2 + close;
+  };
+  let out = String(html)
+    .replace(REPR_CHIP_RE, (m,o,a,t,i,b,c)=> fix(m,o,a,t,i,b,c,''))
+    .replace(REPR_TD_RE,   (m,o,a,t,i,b,c)=> fix(m,o,a,t,i,b,c,o+c));
+  if(n) console.warn('[grist-fiche] '+n+' repr(s) nettoyée(s) au rendu — colonnes concernées :', JSON.stringify(
+    Object.keys(CURRENT||{}).filter(k=>isRefRepr(CURRENT[k]) || asList(CURRENT[k]).some(isRefRepr))
+      .map(k=>({col:k, type:META?.[k]?.type, valeur:CURRENT[k], displayCol:META?.[k]?.displayCol, visibleCol:META?.[k]?.visibleCol}))));
+  return out;
+}
 // Nettoie une valeur d'affichage de référence (chaîne ou tableau) des sentinelles vides
 // et des représentations « Table[id] », qui doivent être résolues en libellé.
 function cleanRefDisp(d){
@@ -1353,7 +1380,7 @@ function render(){
   // Section commentaires (lecture seule)
   html += cmtHtml;
 
-  wrap.innerHTML = html;
+  wrap.innerHTML = scrubReprHtml(html);
   wrap.appendChild(emptyEl);
   bindClicks();
   bindToolbar();
