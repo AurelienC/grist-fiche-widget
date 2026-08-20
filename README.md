@@ -28,6 +28,20 @@ Ce widget affiche **un enregistrement à la fois** sous forme de fiche lisible :
 
 Le widget est **un seul fichier** : `grist-fiche-widget.html`. Aucune dépendance à installer, aucune compilation.
 
+### URL prête à l'emploi
+
+Le widget est publié sur GitHub Pages depuis la branche `main` — rien à héberger :
+
+```
+https://aurelienc.github.io/grist-fiche-widget/
+```
+
+(équivalent à `https://aurelienc.github.io/grist-fiche-widget/grist-fiche-widget.html`, l'URL courte redirige.)
+
+Coller cette URL à l'étape 2 ci-dessous, puis passer directement à *Access level : Full*.
+
+### Ou héberger soi-même
+
 1. **Héberger le fichier** sur n'importe quel hébergement de fichiers statiques accessible en HTTPS (GitHub Pages, Netlify, un dossier statique sur un serveur, etc.). Noter son URL publique, par exemple `https://exemple.org/grist-fiche-widget.html`.
 2. Dans le document Grist, ajouter un widget **Custom** sur la page :
    - *Add Widget to Page* → **Custom**.
@@ -64,6 +78,8 @@ Il suffit d'ouvrir `grist-fiche-widget.html` dans un navigateur : hors de Grist,
 ## Mise à jour / cache
 
 Les hébergeurs statiques mettent le fichier en cache. Après remplacement du fichier, ajouter ou incrémenter un paramètre de version dans la *Custom URL* de Grist, par exemple `…/grist-fiche-widget.html?v=2`. Le panneau « Champs » affiche en bas la **version** déployée pour vérifier.
+
+GitHub Pages sert le fichier avec `Cache-Control: max-age=600` (non configurable) : après un push, compter quelques minutes — ou forcer avec le paramètre `?v=`.
 
 ## Sécurité
 
