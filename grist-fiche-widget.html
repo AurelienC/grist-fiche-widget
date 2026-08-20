@@ -399,7 +399,7 @@
    Widget Grist — Fiche détaillée (vue + édition), style Notion
    ============================================================ */
 
-const WIDGET_BUILD = '2026-08-20 · 45';   // repère anti-cache, visible dans le panneau « Champs »
+const WIDGET_BUILD = '2026-08-20 · 46';   // repère anti-cache, visible dans le panneau « Champs »
 const ICONS = {
   text:'<path d="M4 7V5h16v2M9 5v14m-3 0h6"/>',
   longtext:'<path d="M4 6h16M4 10h16M4 14h10M4 18h7"/>',
@@ -896,6 +896,14 @@ function refFallbackLabel(v){
 //  · id 0  → référence vide : la pastille entière est retirée
 //  · id > 0 → libellé résolu dans la table cible, à défaut « #id »
 // Journalise chaque occurrence : sert à identifier la branche fautive.
+// Libellé d'une repr « Table[id] » : le nom de la table est dans la valeur, on résout
+// donc sans avoir besoin des métadonnées de la colonne. Référence vide (id 0) → ''.
+function reprLabel(v){
+  const m = isRefRepr(v) ? REF_REPR_RE.exec(String(v).trim()) : null;
+  if(!m) return null;
+  const rid = +m[2];
+  return rid ? (labelFromTarget(m[1], null, rid) ?? ('#'+rid)) : '';
+}
 // Pastille ou cellule dont le texte entier est une repr (les valeurs sont échappées,
 // donc la repr est forcément un texte de nœud). Volontairement limité aux pastilles et
 // aux cellules de sous-tableau : un champ markdown contenant « Mot[12] » n'est pas touché.
@@ -905,16 +913,13 @@ function scrubReprHtml(html){
   let n = 0;
   const fix = (m0, open, sp1, tgt, id, sp2, close, empty) => {
     const rid = +id; n++;
-    console.warn('[grist-fiche] repr non résolue au rendu :', tgt+'['+rid+']', '— table préchargée :', !!REFROWS[tgt]);
     if(!rid) return empty;                        // référence vide : rien à afficher
     return open + sp1 + escapeHtml(labelFromTarget(tgt, null, rid) ?? ('#'+rid)) + sp2 + close;
   };
   let out = String(html)
     .replace(REPR_CHIP_RE, (m,o,a,t,i,b,c)=> fix(m,o,a,t,i,b,c,''))
     .replace(REPR_TD_RE,   (m,o,a,t,i,b,c)=> fix(m,o,a,t,i,b,c,o+c));
-  if(n) console.warn('[grist-fiche] '+n+' repr(s) nettoyée(s) au rendu — colonnes concernées :', JSON.stringify(
-    Object.keys(CURRENT||{}).filter(k=>isRefRepr(CURRENT[k]) || asList(CURRENT[k]).some(isRefRepr))
-      .map(k=>({col:k, type:META?.[k]?.type, valeur:CURRENT[k], displayCol:META?.[k]?.displayCol, visibleCol:META?.[k]?.visibleCol}))));
+  if(n) console.debug('[grist-fiche] '+n+' repr(s) « Table[id] » rattrapée(s) au rendu (filet de sécurité)');
   return out;
 }
 // Nettoie une valeur d'affichage de référence (chaîne ou tableau) des sentinelles vides
@@ -1042,10 +1047,10 @@ function fmtScalar(meta, value){
       const lbl = labelFromTarget(tt, meta.visibleCol, rid);
       return escapeHtml(lbl ?? ('#'+rid));
     }
-    return escapeHtml(refFallbackLabel(value));
+    return escapeHtml(reprLabel(value) ?? refFallbackLabel(value));
   }
   if(kind==='reflist'){ return escapeHtml(asList(value).filter(x=>x!=null&&x!=='').length+' lié(s)'); }
-  return escapeHtml(String(value));
+  return escapeHtml(reprLabel(value) ?? String(value));
 }
 
 // Résout les lignes référencées d'une RefList : {rowId, ri (index dans REFROWS), label}
@@ -1116,6 +1121,12 @@ function subtableBlock(k){
       const sty = stl ? ` style="${stl}"` : '';
       // ligne introuvable dans le cache : afficher au moins le libellé dans la 1re colonne
       if(r.ri==null && ci===0 && (v==null||v==='')) return `<td${sty}>${escapeHtml(String(r.label))}</td>`;
+      // Colonne formule renvoyant un enregistrement : fetchTable sérialise « Table[id] ».
+      // La repr porte sa table cible, on résout directement (indépendant du type déclaré).
+      if(isRefRepr(v)){
+        const lbl = reprLabel(v);
+        return `<td${sty}>${lbl? `<span class="chip">${escapeHtml(lbl)}</span>` : ''}</td>`;
+      }
       // Choix : pastilles colorées (choiceOptions), comme sur la fiche
       if(kind==='choice'){
         return `<td${sty}>${(v==null||v==='')?'':chipHtml(String(v), wo)}</td>`;
@@ -1612,8 +1623,8 @@ function propRow(k){
   } else if(isRefRepr(val)){
     // Colonne Any / formule renvoyant un enregistrement : « Table[id] » n'est pas un libellé
     const rid = refRowId(val), tgt = (REF_REPR_RE.exec(String(val).trim())||[])[1];
-    const lbl = rid!=null ? (labelFromTarget(tgt, null, rid) ?? ('#'+rid)) : '';
-    inner = lbl ? `<span class="chips">${refChip(tgt, rid, lbl)}</span>` : (ph=true,'Vide');
+    const lbl = reprLabel(val) || '';
+    inner = lbl ? `<span class="chips">${refChip(tgt, rid, lbl)}</span>` : (ph=true,'Vide');   // rid/tgt : pastille ouvrable
   } else {
     inner = (val==null||val==='')? (ph=true,'Vide') : escapeHtml(String(val));
   }
@@ -2195,12 +2206,16 @@ async function preloadRefRows(){
       labelTargets.add(t);
       if(kind==='reflist' && (RL_MODE[k]||'table')==='table') freshTargets.add(t);
     }
-    // Repr « Table[id] » dans une colonne Any / formule : la table cible est dans la valeur
-    for(const k in CURRENT){
-      for(const x of asList(CURRENT[k])){
-        const m = isRefRepr(x) ? REF_REPR_RE.exec(String(x).trim()) : null;
-        if(m && +m[2] > 0) labelTargets.add(m[1]);
-      }
+    // Repr « Table[id] » dans une colonne Any / formule : la table cible est dans la valeur.
+    // Vaut pour l'enregistrement courant comme pour les lignes des sous-tableaux déjà chargées.
+    const scanRepr = v => { for(const x of asList(v)){
+      const m = isRefRepr(x) ? REF_REPR_RE.exec(String(x).trim()) : null;
+      if(m && +m[2] > 0) labelTargets.add(m[1]);
+    } };
+    for(const k in CURRENT) scanRepr(CURRENT[k]);
+    for(const t in REFROWS){
+      const tr = REFROWS[t];
+      for(const c in tr){ const col = tr[c]; if(Array.isArray(col)) col.slice(0,200).forEach(scanRepr); }
     }
     for(const t of labelTargets){
       // une table par une : un nom de table invalide (repr issue d'un texte quelconque)
