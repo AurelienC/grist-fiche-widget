@@ -51,7 +51,7 @@ Coller cette URL à l'étape 2 ci-dessous, puis passer directement à *Access le
 
 ## Configuration
 
-Ouvrir le panneau **« Champs »** (roue crantée, en haut à droite de la fiche). Les réglages sont **mémorisés par widget** (donc par page) dans les options du widget Grist. On y trouve :
+Ouvrir le panneau **« Champs »** (roue crantée, en haut à droite de la fiche). Les réglages sont **mémorisés par widget** (donc par page) dans les options du widget Grist, et **par table** : le panneau configure toujours la table affichée, dont le nom est rappelé en tête du panneau. Régler les champs d'un enregistrement lié ouvert dans le widget (un contact depuis une entreprise, par exemple) ne touche donc pas au paramétrage de la table principale. On y trouve :
 
 - **Titre / Sous-titre / Tags** : les colonnes promues dans l'en-tête.
 - **Image d'en-tête** : une colonne pièce jointe ou une colonne URL d'image.
@@ -59,7 +59,7 @@ Ouvrir le panneau **« Champs »** (roue crantée, en haut à droite de la fiche
 - **Replier** : cocher un champ pour l'envoyer dans « Autres champs ».
 - **Références multiples** : affichage en *labels* ou en *tableau*, et colonnes affichées.
 - **Modèle de lien** : voir ci-dessous.
-- **Copier / Coller la config** : pour reprendre le même paramétrage sur une autre page de la même table.
+- **Copier / Coller la config** : pour reprendre le même paramétrage sur une autre page de la même base. La copie emporte **toutes** les tables paramétrées dans ce widget (table principale et sous-tables ouvertes en navigation) ; un seul collage les restaure toutes. Le modèle de lien, propre à chaque page, n'est jamais copié.
 
 ## Liens partageables (ancre vers une ligne)
 
