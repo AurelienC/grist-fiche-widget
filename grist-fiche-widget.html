@@ -258,6 +258,14 @@
   .btn.primary:hover{filter:brightness(1.06)}
   /* Cadre Toast UI dans l'esthétique du widget */
   .toastui-editor-defaultUI{border:1px solid var(--line-strong)!important;border-radius:8px;overflow:hidden}
+  /* Un seul jeu d'onglets : « WYSIWYG / Markdown » en bas. On masque les onglets
+     « Écrire / Aperçu » du mode Markdown (doublon de l'onglet WYSIWYG) et le volet
+     d'aperçu associé : le mode Markdown n'affiche plus que la source. */
+  .toastui-editor-md-tab-container{display:none!important}
+  .toastui-editor-md-preview,
+  .toastui-editor-md-splitter{display:none!important}
+  .toastui-editor-md-container .toastui-editor{width:100%!important}
+  .toastui-editor-main .toastui-editor-md-mode > .toastui-editor{width:100%!important}
   .checks{display:flex;flex-wrap:wrap;gap:6px}
   .checks label{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;
     border:1px solid var(--line-strong);border-radius:11px;font-size:12.5px;cursor:pointer}
@@ -304,7 +312,8 @@
   .gear svg{width:15px;height:15px}
   .config{border:1px solid var(--line-strong);border-radius:10px;padding:10px 12px;
     margin-bottom:18px;background:var(--bg-soft)}
-  .config .ctitle{font-size:12px;color:var(--ink-faint);text-transform:uppercase;
+  .config .cscope{font-size:11px;color:var(--ink-faint);margin-bottom:8px}
+.config .ctitle{font-size:12px;color:var(--ink-faint);text-transform:uppercase;
     letter-spacing:.06em;margin-bottom:8px}
   .config .row{display:flex;align-items:center;gap:9px;padding:4px 4px;border-radius:6px;font-size:14px;background:var(--bg-soft)}
   .config .row:hover{background:var(--bg)}
@@ -399,7 +408,7 @@
    Widget Grist — Fiche détaillée (vue + édition), style Notion
    ============================================================ */
 
-const WIDGET_BUILD = '2026-08-20 · 46';   // repère anti-cache, visible dans le panneau « Champs »
+const WIDGET_BUILD = '2026-09-07 · 48';   // repère anti-cache, visible dans le panneau « Champs »
 const ICONS = {
   text:'<path d="M4 7V5h16v2M9 5v14m-3 0h6"/>',
   longtext:'<path d="M4 6h16M4 10h16M4 14h10M4 18h7"/>',
@@ -461,7 +470,8 @@ function unescapeMd(src){
 }
 function renderMd(src){
   if(src==null||src==='') return '';
-  return DOMPurify.sanitize(marked.parse(tidyEmphasis(unescapeMd(String(src)))));
+  return DOMPurify.sanitize(marked.parse(
+    mergeAdjacentStrong(tidyEmphasis(stripBrLines(unescapeMd(String(src)))))));
 }
 
 /* À l'enregistrement : corrige le markdown produit par l'éditeur WYSIWYG quand un
@@ -491,6 +501,56 @@ function normalizeEmphasis(src){
     return l;
   }).join('\n');
   return s.replace(/\u0000(\d+)\u0000/g,(_,i)=>code[+i]);
+}
+
+/* L'éditeur WYSIWYG produit un « <br> » seul sur sa ligne pour les lignes vides.
+   En markdown c'est un bloc HTML : il avale les lignes suivantes, qui ne sont plus
+   interprétées (le rendu natif de Grist affiche alors « **gras** » en clair).
+   On le remplace par une vraie ligne vide. */
+function stripBrLines(src){
+  if(src==null) return src;
+  return String(src).replace(/^[ \t]*<br\s*\/?>[ \t]*$/gim, '');
+}
+
+/* L'éditeur coupe souvent le gras en deux (« **Nom -** **Ville** ») : on recolle
+   les paires consécutives séparées par de simples espaces. */
+function mergeAdjacentStrong(src){
+  if(src==null) return src;
+  let s=String(src), prev;
+  do{ prev=s;
+    s = s.replace(/\*\*([^*\n]+?)\*\*([ \t]+)\*\*([^*\n]+?)\*\*/g, '**$1$2$3**')
+         .replace(/__([^_\n]+?)__([ \t]+)__([^_\n]+?)__/g,         '__$1$2$3__');
+  } while(s!==prev);
+  return s;
+}
+
+/* Le widget rend les retours à la ligne simples (breaks:true), pas le rendu natif
+   de Grist ni la plupart des lecteurs markdown. On matérialise donc le retour à la
+   ligne par deux espaces en fin de ligne : même affichage partout. */
+function hardenLineBreaks(src){
+  if(src==null) return src;
+  const lines = String(src).split('\n');
+  const isBlock = l => /^\s*($|#{1,6}\s|>|[*+-]\s|\d+[.)]\s|\||```|~~~|(\*\s*){3,}$|(-\s*){3,}$|(_\s*){3,}$)/.test(l);
+  let fence = false;
+  for(let i=0;i<lines.length-1;i++){
+    const l = lines[i];
+    if(/^\s*(```|~~~)/.test(l)){ fence = !fence; continue; }
+    if(fence) continue;
+    if(isBlock(l) || isBlock(lines[i+1])) continue;   // déjà un bloc : le saut existe
+    if(/\s{2,}$/.test(l) || /\\$/.test(l)) continue;  // saut dur déjà présent
+    lines[i] = l.replace(/\s+$/,'') + '  ';
+  }
+  return lines.join('\n');
+}
+
+/* Markdown normalisé, écrit tel quel dans Grist : rendu identique dans le widget,
+   dans l'aperçu de l'éditeur et dans l'affichage natif de Grist. Idempotent. */
+function cleanMarkdown(src){
+  if(src==null) return src;
+  return hardenLineBreaks(
+           mergeAdjacentStrong(
+             normalizeEmphasis(
+               stripBrLines(unescapeMd(String(src))))));
 }
 
 const $ = (s,el=document)=>el.querySelector(s);
@@ -527,6 +587,8 @@ let RL_COLS = {};          // {colId: [colId cible…]} colonnes affichées en m
 let BTN_FIELDS = new Set(); // colIds affichés en bouton (champs texte contenant une URL)
 let LINK_KEY = 'auto';     // colonne du lien partageable (SELF_HYPERLINK) : 'auto' | 'none' | colId
 let LINK_TEMPLATE = '';    // modèle de lien d'ancrage collé (Ctrl+Shift+A) : le n° de ligne y est remplacé
+let OPTS_RAW = {};         // options brutes du widget ({byTable:{tableId:cfg}} + clés à plat héritées)
+let CFG_TABLE = null;      // table dont le paramétrage est chargé dans l'état ci-dessus
 let configuring = false;   // mode configuration (cases à cocher)
 let foldOpen = false;      // état ouvert/fermé du <details>
 
@@ -1260,6 +1322,9 @@ function render(){
   // Panneau de configuration (sous l'en-tête)
   if(configuring){
     html += `<div class="config">`;
+    // Le paramétrage vaut pour la table affichée : le rappeler évite la confusion
+    // quand on configure un enregistrement lié (autre table).
+    html += `<div class="cscope">Paramétrage de la table <b>${escapeHtml(ACTIVE_TABLE||TABLE_ID||'')}</b></div>`;
     html += `<div class="ctitle">Colonne servant de titre</div>
       <select class="editor" data-role="title" style="margin-bottom:12px">
         <option value="">— Automatique (1er champ texte) —</option>` +
@@ -1351,7 +1416,7 @@ function render(){
         <button class="btn" data-act="cfg-copy">Copier la config</button>
         <button class="btn" data-act="cfg-paste">Coller la config</button>
       </div>
-      <div class="cfg-io-note">Copie titre, sous-titre, tags, ordre, champs repliés, modes de listes et boutons. À coller sur une autre page de la même base. (Le modèle de lien reste propre à chaque page.)</div>
+      <div class="cfg-io-note">Copie le paramétrage de <b>toutes</b> les tables réglées ici (table principale et sous-tables ouvertes dans le widget) : titre, sous-titre, tags, ordre, champs repliés, modes de listes et boutons. À coller sur une autre page de la même base — un seul collage restaure l'ensemble. (Le modèle de lien reste propre à chaque page.)</div>
       <textarea class="editor cfg-io-box" data-cfgbox="1" placeholder="Colle ici la config puis « Appliquer »…" style="display:none;width:100%;box-sizing:border-box;min-height:70px;margin-top:8px"></textarea>
       <button class="btn primary" data-act="cfg-apply" style="display:none;margin-top:6px">Appliquer</button>`;
     html += `<div class="cfg-ver">Version ${WIDGET_BUILD}</div>`;
@@ -1799,7 +1864,7 @@ function editMarkdown(el, key, value){
   if(grow){ host.style.flex='1 1 auto'; host.style.minHeight='0'; }
   const actions = document.createElement('div'); actions.className='editor-actions';
   actions.innerHTML = `<span class="save-state" style="font-size:11.5px;color:var(--ink-faint)">
-      Titres : bouton <b>Tt</b> de la barre · ou onglet <b>Markdown</b> (en bas) pour taper <b>#</b>, <b>##</b>…</span>
+      Onglet <b>WYSIWYG</b> : mise en forme visuelle · onglet <b>Markdown</b> : la source (<b>#</b>, <b>**gras**</b>…)</span>
       <span class="spacer"></span>
       <button class="btn" data-act="cancel">Annuler</button>
       <button class="btn primary" data-act="save">Fermer</button>`;
@@ -1837,7 +1902,7 @@ function editMarkdown(el, key, value){
     clearTimeout(saveTimer);
     saveTimer = setTimeout(()=>{
       if(!mdEditor) return;
-      const md = normalizeEmphasis(mdEditor.getMarkdown());
+      const md = cleanMarkdown(mdEditor.getMarkdown());
       if(md===lastSaved) return;
       lastSaved = md;
       commit(key, md, {silent:true});   // silent : ne re-rend pas, garde l'éditeur ouvert
@@ -1848,7 +1913,7 @@ function editMarkdown(el, key, value){
 
   const finish = (save)=>{
     clearTimeout(saveTimer);
-    const md = mdEditor ? normalizeEmphasis(mdEditor.getMarkdown()) : null;
+    const md = mdEditor ? cleanMarkdown(mdEditor.getMarkdown()) : null;
     if(mdEditor){ try{ mdEditor.destroy(); }catch(_){} mdEditor=null; }
     editingKey=null;
     if(save){
@@ -1880,7 +1945,7 @@ function editMarkdownFallback(el, key, value){
   el.replaceWith(box); ta.focus();
   const refresh = ()=>{ $('.md',prev).innerHTML = renderMd(ta.value)||'<span style="color:var(--ink-faint)">…</span>'; };
   ta.addEventListener('input', refresh);
-  const done = save=>{ if(save) commit(key, normalizeEmphasis(ta.value)); editingKey=null; if(!save) render(); };
+  const done = save=>{ if(save) commit(key, cleanMarkdown(ta.value)); editingKey=null; if(!save) render(); };
   ta.addEventListener('keydown', e=>{
     if(e.key==='Enter' && (e.metaKey||e.ctrlKey)){e.preventDefault();done(true);}
     if(e.key==='Escape'){e.preventDefault();done(false);}
@@ -2133,6 +2198,7 @@ async function loadMetaFor(tableId){
     await fetchMetatables();
     const m = buildMetaFor(tableId);
     META = m.META; REFMAP = m.REFMAP; TABLE_REF = m.TABLE_REF; ACTIVE_TABLE = tableId;
+    if(CFG_TABLE!==tableId) applyConfigForTable(tableId);
   }catch(err){ console.warn('Métadonnées indisponibles', err); META = META || {}; }
 }
 async function loadMeta(){
@@ -2282,47 +2348,131 @@ function commentsHtml(){
 
 /* Persistance dans les options du widget (par widget) : champs repliés + titre */
 function gristOptionsApi(){ return (typeof grist!=='undefined' && grist.widgetApi) ? grist.widgetApi : (typeof grist!=='undefined' ? grist : null); }
+function stripLocal(cfg){ const c = {...(cfg||{})}; delete c.linkTemplate; delete c.byTable; return c; }
+/* Paramétrage réutilisable : table affichée (clés à plat, compatibilité) + TOUTES
+   les tables paramétrées dans ce widget (principale et sous-tables), sans le
+   modèle de lien qui reste propre à chaque page. */
 function configPayload(){
-  // Paramétrage réutilisable (sans linkTemplate, propre à chaque page)
-  return { collapsed:[...FOLDED], order: ORDER, title: TITLE_KEY, subtitle: SUBTITLE_KEY, tags: TAGS_KEY, headerImage: HEADER_IMG,
-           reflistMode: RL_MODE, reflistCols: RL_COLS, link: LINK_KEY, buttons:[...BTN_FIELDS] };
+  const cur = CFG_TABLE || ACTIVE_TABLE || TABLE_ID;
+  const byTable = {};
+  const stored = (OPTS_RAW && OPTS_RAW.byTable) || {};
+  for(const t in stored) byTable[t] = stripLocal(stored[t]);
+  if(TABLE_ID && !byTable[TABLE_ID]){
+    const base = storedConfigFor(TABLE_ID);
+    if(base) byTable[TABLE_ID] = stripLocal(pickConfig(base));
+  }
+  const curCfg = stripLocal(configOfCurrent());
+  if(cur) byTable[cur] = curCfg;
+  return { ...curCfg, byTable };
 }
 function applyConfigJson(text){
   let obj; try{ obj = JSON.parse(text); }catch(e){ toast('Config illisible (JSON invalide)'); return; }
   if(!obj || typeof obj!=='object'){ toast('Config invalide'); return; }
   delete obj.linkTemplate;            // ne pas écraser le modèle de lien de cette page
-  applyOptions(obj); saveOptions(); render();
+  const cur = CFG_TABLE || ACTIVE_TABLE || TABLE_ID;
+  const src = (obj.byTable && typeof obj.byTable==='object') ? obj.byTable : null;
+  let tables = 0;
+  if(src){
+    // Config complète : on restaure chaque table (principale + sous-tables), en
+    // conservant le modèle de lien déjà enregistré côté page pour chacune.
+    const byTable = {...((OPTS_RAW && OPTS_RAW.byTable) || {})};
+    if(TABLE_ID && !byTable[TABLE_ID]){
+      const base = storedConfigFor(TABLE_ID);
+      if(base) byTable[TABLE_ID] = pickConfig(base);
+    }
+    for(const t in src){
+      if(!src[t] || typeof src[t]!=='object') continue;
+      const tpl = (byTable[t] && byTable[t].linkTemplate) || '';
+      byTable[t] = {...stripLocal(pickConfig(src[t])), linkTemplate: tpl};
+      tables++;
+    }
+    OPTS_RAW = {...OPTS_RAW, byTable};
+    applyConfigForTable(cur);
+  } else {
+    const keepTpl = LINK_TEMPLATE;    // le modèle de lien reste propre à cette page
+    resetConfig(); LINK_TEMPLATE = keepTpl; applyConfig(obj);
+  }
+  saveOptions(); render();
+  const shown = src ? (src[cur] || obj) : obj;
   const bits=[];
-  if('title' in obj) bits.push('titre');
-  if('subtitle' in obj) bits.push('sous-titre');
-  if('tags' in obj) bits.push('tags');
-  if('headerImage' in obj) bits.push('image');
-  if(Array.isArray(obj.order) && obj.order.length) bits.push('ordre');
-  if(Array.isArray(obj.collapsed)) bits.push(`${obj.collapsed.length} replié${obj.collapsed.length>1?'s':''}`);
-  if(obj.reflistMode) bits.push('listes réf.');
-  if(Array.isArray(obj.buttons)) bits.push('boutons');
+  if('title' in shown) bits.push('titre');
+  if('subtitle' in shown) bits.push('sous-titre');
+  if('tags' in shown) bits.push('tags');
+  if('headerImage' in shown) bits.push('image');
+  if(Array.isArray(shown.order) && shown.order.length) bits.push('ordre');
+  if(Array.isArray(shown.collapsed)) bits.push(`${shown.collapsed.length} replié${shown.collapsed.length>1?'s':''}`);
+  if(shown.reflistMode) bits.push('listes réf.');
+  if(Array.isArray(shown.buttons)) bits.push('boutons');
+  if(tables>1) bits.push(`${tables} tables`);
   toast('Appliqué — ' + (bits.join(', ') || 'rien à appliquer'));
 }
+/* Le paramétrage est mémorisé PAR TABLE (opts.byTable[tableId]) : ouvrir un
+   enregistrement lié et régler ses champs ne doit pas écraser le paramétrage de
+   la table principale. Les anciennes options « à plat » restent lues comme le
+   paramétrage de la table principale (compatibilité ascendante). */
+function configOfCurrent(){
+  return { collapsed:[...FOLDED], order: ORDER, title: TITLE_KEY, subtitle: SUBTITLE_KEY, tags: TAGS_KEY, headerImage: HEADER_IMG,
+           reflistMode: RL_MODE, reflistCols: RL_COLS, link: LINK_KEY, buttons:[...BTN_FIELDS], linkTemplate: LINK_TEMPLATE };
+}
+function resetConfig(){
+  FOLDED = new Set(); ORDER = [];
+  TITLE_KEY = null; SUBTITLE_KEY = null; TAGS_KEY = null; HEADER_IMG = null;
+  RL_MODE = {}; RL_COLS = {};
+  LINK_KEY = 'auto'; BTN_FIELDS = new Set(); LINK_TEMPLATE = '';
+}
+function applyConfig(cfg){
+  if(!cfg) return;
+  if(Array.isArray(cfg.collapsed)) FOLDED = new Set(cfg.collapsed);
+  if(Array.isArray(cfg.order)) ORDER = cfg.order.slice();
+  if('title' in cfg) TITLE_KEY = cfg.title || null;
+  if('subtitle' in cfg) SUBTITLE_KEY = cfg.subtitle || null;
+  if('tags' in cfg) TAGS_KEY = cfg.tags || null;
+  if('headerImage' in cfg) HEADER_IMG = cfg.headerImage || null;
+  if(cfg.reflistMode && typeof cfg.reflistMode==='object') RL_MODE = {...cfg.reflistMode};
+  if(cfg.reflistCols && typeof cfg.reflistCols==='object') RL_COLS = {...cfg.reflistCols};
+  if('link' in cfg) LINK_KEY = cfg.link || 'auto';
+  if(Array.isArray(cfg.buttons)) BTN_FIELDS = new Set(cfg.buttons);
+  if('linkTemplate' in cfg) LINK_TEMPLATE = cfg.linkTemplate || '';
+}
+const CFG_KEYS = ['collapsed','order','title','subtitle','tags','headerImage','reflistMode','reflistCols','link','buttons','linkTemplate'];
+function hasFlatConfig(o){ return !!o && CFG_KEYS.some(k=>k in o); }
+function pickConfig(o){ const r={}; for(const k of CFG_KEYS){ if(o && k in o) r[k]=o[k]; } return r; }
+/* Paramétrage enregistré pour une table, ou null s'il n'y en a pas. */
+function storedConfigFor(tableId){
+  const byTable = OPTS_RAW && OPTS_RAW.byTable;
+  if(byTable && tableId && byTable[tableId]) return byTable[tableId];
+  // Options historiques (à plat) : elles décrivent la table principale du widget
+  if((!tableId || tableId===TABLE_ID) && hasFlatConfig(OPTS_RAW)) return OPTS_RAW;
+  return null;
+}
+/* Charge dans l'état courant le paramétrage de la table affichée. */
+function applyConfigForTable(tableId){
+  const cfg = storedConfigFor(tableId);
+  resetConfig();
+  applyConfig(cfg);
+  CFG_TABLE = tableId || null;
+}
 function applyOptions(opts){
-  if(!opts) return;
-  if(Array.isArray(opts.collapsed)) FOLDED = new Set(opts.collapsed);
-  if(Array.isArray(opts.order)) ORDER = opts.order.slice();
-  if('title' in opts) TITLE_KEY = opts.title || null;
-  if('subtitle' in opts) SUBTITLE_KEY = opts.subtitle || null;
-  if('tags' in opts) TAGS_KEY = opts.tags || null;
-  if('headerImage' in opts) HEADER_IMG = opts.headerImage || null;
-  if(opts.reflistMode && typeof opts.reflistMode==='object') RL_MODE = {...opts.reflistMode};
-  if(opts.reflistCols && typeof opts.reflistCols==='object') RL_COLS = {...opts.reflistCols};
-  if('link' in opts) LINK_KEY = opts.link || 'auto';
-  if(Array.isArray(opts.buttons)) BTN_FIELDS = new Set(opts.buttons);
-  if('linkTemplate' in opts) LINK_TEMPLATE = opts.linkTemplate || '';
+  OPTS_RAW = (opts && typeof opts==='object') ? opts : {};
+  applyConfigForTable(ACTIVE_TABLE || TABLE_ID);
 }
 async function saveOptions(){
   if(!IN_GRIST) return;
   try{
     const api = gristOptionsApi();
-    const payload = { collapsed:[...FOLDED], order: ORDER, title: TITLE_KEY, subtitle: SUBTITLE_KEY, tags: TAGS_KEY, headerImage: HEADER_IMG,
-                      reflistMode: RL_MODE, reflistCols: RL_COLS, link: LINK_KEY, buttons:[...BTN_FIELDS], linkTemplate: LINK_TEMPLATE };
+    const tableId = CFG_TABLE || ACTIVE_TABLE || TABLE_ID;
+    const cfg = configOfCurrent();
+    const byTable = {...((OPTS_RAW && OPTS_RAW.byTable) || {})};
+    // Fige le paramétrage historique de la table principale avant de basculer sur byTable
+    if(TABLE_ID && !byTable[TABLE_ID]){
+      const base = storedConfigFor(TABLE_ID);
+      if(base && base!==OPTS_RAW) byTable[TABLE_ID] = {...base};
+      else if(hasFlatConfig(OPTS_RAW)) byTable[TABLE_ID] = pickConfig(OPTS_RAW);
+    }
+    if(tableId) byTable[tableId] = cfg;
+    // Les clés « à plat » restent celles de la table principale (compatibilité)
+    const payload = {...(byTable[TABLE_ID] || (tableId ? {} : cfg)), byTable};
+    OPTS_RAW = payload;
     if(api && api.setOptions) await api.setOptions(payload);
     else if(api && api.setOption){ for(const [k,v] of Object.entries(payload)) await api.setOption(k, v); }
   }catch(e){ console.warn('Sauvegarde des options impossible', e); }
